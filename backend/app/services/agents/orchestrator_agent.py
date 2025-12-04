@@ -31,12 +31,30 @@ async def orchestrator_agent(state: InterviewState) -> Dict:
     current_round = state.get("current_round", "welcome")
     job_role = state.get("job_role", "")
     
-    # DEBUG: Log current state
-    print(f"ORCHESTRATOR DEBUG:")
-    print(f"  conversation_phase: {conversation_phase}")
-    print(f"  question_count: {question_count}")
-    print(f"  current_round: {current_round}")
-    print(f"  resume_summary exists: {resume_summary is not None}")
+    user_answers = state.get("user_answers", [])
+    evaluation_history = state.get("evaluation_history", [])
+
+    # 1. Detection of New Answers
+    if len(user_answers) > len(evaluation_history):
+        print(f"New answer detected! user_answers={len(user_answers)}, eval_history={len(evaluation_history)}")
+        
+        # Prepare evaluation context
+        last_answer = user_answers[-1] if user_answers else {}
+        last_answer_text = last_answer.get("answer", "")
+        
+        previous_questions = state.get("previous_questions", [])
+        last_question_data = previous_questions[-1] if previous_questions else {}
+        
+        return {
+            "next_action": "evaluate",
+            "evaluation_context": {
+                "question": last_question_data.get("question_text", ""),
+                "answer": last_answer_text,
+                "domain": last_question_data.get("domain", "General"),
+                "round": state.get("current_round", "technical"),
+                "difficulty": last_question_data.get("difficulty", "medium")
+            }
+        }
     
     # Check if we just generated a question and it's waiting to be sent
     question_agent_response = state.get("question_agent_response")
@@ -65,6 +83,24 @@ async def orchestrator_agent(state: InterviewState) -> Dict:
                 "status": "error"
             }
     
+    # 2. Adaptive Logic (The "Smart" Feature)
+    # Retrieve the last score to adjust difficulty
+    evaluation_history = state.get("evaluation_history", [])
+    current_difficulty = state.get("difficulty", "medium")
+    
+    if evaluation_history:
+        last_eval = evaluation_history[-1]
+        last_score = last_eval.get("score", 0.7)
+        
+        if last_score < 0.6:
+            current_difficulty = "easy"
+        elif last_score > 0.85:
+            current_difficulty = "hard"
+        else:
+            current_difficulty = "medium"
+            
+        print(f"ADAPTIVE LOGIC: Last score={last_score}, New Difficulty={current_difficulty}")
+
     # GREETING PHASE
     if conversation_phase == "greeting":
         # This is handled in interview_service.generate_welcome_message
@@ -110,7 +146,7 @@ Return ONLY the question, nothing else."""
                     "question_agent_response": {
                         "question": intro_question,
                         "domain": "Introduction",
-                        "difficulty": "easy",
+                        "difficulty": current_difficulty,
                         "error": None
                     },
                     "next_action": "wait",
@@ -123,7 +159,7 @@ Return ONLY the question, nothing else."""
                     "question_agent_response": {
                         "question": "Thank you for joining! To get started, could you tell me a bit about yourself and what excites you about this role?",
                         "domain": "Introduction",
-                        "difficulty": "easy",
+                        "difficulty": current_difficulty,
                         "error": None
                     },
                     "next_action": "wait",
@@ -222,9 +258,11 @@ DOMAIN: [Single domain name]
                 elif line.startswith("DOMAIN:"):
                     domain = line.replace("DOMAIN:", "").strip()
             
-            # Determine difficulty based on significance
-            difficulty_map = {"high": "hard", "medium": "medium", "low": "easy"}
-            difficulty = difficulty_map.get(significance, "medium")
+            # Determine difficulty based on significance and adaptive logic
+            # We prioritize adaptive difficulty if it's set to something specific, 
+            # but for resume points, maybe we should respect the significance too?
+            # For now, let's use the adaptive difficulty as the base.
+            difficulty = current_difficulty
             
             print(f"Orchestrator Decision:")
             print(f"   Comment: {comment}")
@@ -258,10 +296,10 @@ DOMAIN: [Single domain name]
             return {
                 "orchestrator_intent": f"Tell me more about: {point_text}",
                 "selected_domain": domains[0] if domains else "General",
-                "difficulty": "medium",
+                "difficulty": current_difficulty,
                 "question_context": {
                     "domain": domains[0] if domains else "General",
-                    "difficulty": "medium",
+                    "difficulty": current_difficulty,
                     "resume_context": point_text,
                     "job_role": job_role,
                     "round": "resume_discussion"
@@ -289,28 +327,18 @@ DOMAIN: [Single domain name]
         technical_domains = ["Python", "System Design", "Machine Learning", "SQL", "Data Structures"]
         selected_domain = technical_domains[question_count % len(technical_domains)]
         
-        # Adjust difficulty based on performance
-        evaluation_history = state.get("evaluation_history", [])
-        difficulty = state.get("difficulty", "medium")
-        
-        if len(evaluation_history) >= 2:
-            recent_scores = [eval.get("score", 0.5) for eval in evaluation_history[-3:]]
-            avg_score = sum(recent_scores) / len(recent_scores)
-            
-            if avg_score > 0.8 and difficulty != "hard":
-                difficulty = "hard"
-            elif avg_score < 0.5 and difficulty != "easy":
-                difficulty = "easy"
+        # Use adaptive difficulty
+        difficulty = current_difficulty
         
         return {
             "selected_domain": selected_domain,
             "difficulty": difficulty,
             "orchestrator_intent": f"Test knowledge in {selected_domain}",
             "question_context": {
-        "domain": selected_domain,
-        "difficulty": difficulty,
+                "domain": selected_domain,
+                "difficulty": difficulty,
                 "resume_context": "",
-        "job_role": job_role,
+                "job_role": job_role,
                 "round": "technical_deep_dive"
             },
             "next_action": "generate_question",

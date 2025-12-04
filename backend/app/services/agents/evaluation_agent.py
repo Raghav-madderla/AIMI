@@ -76,23 +76,41 @@ Format your response as JSON with the following structure:
                 "improvements": []
             }
         
+        evaluation_data = {
+            "score": float(evaluation_result.get("score", 0.7)),
+            "feedback": {
+                "feedback_text": evaluation_result.get("feedback_text", ""),
+                "strengths": evaluation_result.get("strengths", []),
+                "improvements": evaluation_result.get("improvements", [])
+            },
+            "domain": domain,
+            "question": question
+        }
+
         return {
             "evaluation_agent_response": {
-                "score": float(evaluation_result.get("score", 0.7)),
-                "feedback": {
-                    "feedback_text": evaluation_result.get("feedback_text", ""),
-                    "strengths": evaluation_result.get("strengths", []),
-                    "improvements": evaluation_result.get("improvements", [])
-                },
+                "score": evaluation_data["score"],
+                "feedback": evaluation_data["feedback"],
                 "error": None
-            }
+            },
+            "evaluation_history": [evaluation_data],
+            "next_action": "orchestrate"
         }
     
     except Exception as e:
+        # Add a placeholder evaluation to avoid infinite loops
+        evaluation_data = {
+            "score": 0.0,
+            "feedback": {"error": str(e)},
+            "domain": domain,
+            "question": question
+        }
         return {
             "evaluation_agent_response": {
                 "error": f"Error evaluating answer: {str(e)}",
                 "feedback": None,
                 "score": None
-            }
+            },
+            "evaluation_history": [evaluation_data],
+            "next_action": "orchestrate"
         }
