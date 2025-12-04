@@ -84,11 +84,33 @@ async def orchestrator_agent(state: InterviewState) -> Dict:
             }
     
     # 2. Adaptive Logic (The "Smart" Feature)
-    # Retrieve the last score to adjust difficulty
+    # Retrieve the last score and metrics to adjust difficulty
     evaluation_history = state.get("evaluation_history", [])
     current_difficulty = state.get("difficulty", "medium")
     
-    if evaluation_history:
+    if len(evaluation_history) >= 2:
+        # Analyze last 2 evaluations
+        recent_evals = evaluation_history[-2:]
+        accuracies = []
+        for eval_data in recent_evals:
+            metrics = eval_data.get("metrics", {})
+            accuracy = metrics.get("accuracy", 0)
+            accuracies.append(accuracy)
+            
+        avg_accuracy = sum(accuracies) / len(accuracies)
+        print(f"ADAPTIVE LOGIC: Last 2 Accuracies: {accuracies}, Avg: {avg_accuracy}")
+        
+        if avg_accuracy > 8:
+            current_difficulty = "hard"
+            print("Performance is high. Increasing difficulty to Hard.")
+        elif avg_accuracy < 4:
+            current_difficulty = "easy"
+            print("Performance is struggling. Decreasing difficulty to Easy.")
+        else:
+            # Keep current difficulty
+            pass
+    elif evaluation_history:
+        # Fallback for single history item (keep existing logic)
         last_eval = evaluation_history[-1]
         last_score = last_eval.get("score", 0.7)
         
@@ -96,11 +118,9 @@ async def orchestrator_agent(state: InterviewState) -> Dict:
             current_difficulty = "easy"
         elif last_score > 0.85:
             current_difficulty = "hard"
-        else:
-            current_difficulty = "medium"
             
-        print(f"ADAPTIVE LOGIC: Last score={last_score}, New Difficulty={current_difficulty}")
-
+    print(f"ADAPTIVE LOGIC: New Difficulty set to {current_difficulty}")
+    
     # GREETING PHASE
     if conversation_phase == "greeting":
         # This is handled in interview_service.generate_welcome_message
@@ -140,7 +160,8 @@ Return ONLY the question, nothing else."""
                         {"role": "user", "content": prompt}
                 ]
                 
-                intro_question = local_llm_service.generate(messages, max_new_tokens=150, temperature=0.8)
+                # Increased tokens to allow for thinking + response
+                intro_question = local_llm_service.generate(messages, max_new_tokens=300, temperature=0.8)
                 
                 return {
                     "question_agent_response": {
@@ -173,11 +194,26 @@ Return ONLY the question, nothing else."""
         # Check if we have resume summary
         if not resume_summary:
             print(f"No resume summary, skipping to technical")
-            # Skip to technical if no resume summary
+            
+            # PREPARE THE FIRST TECHNICAL QUESTION IMMEDIATELY
+            technical_domains = ["Python", "System Design", "Machine Learning", "SQL", "Data Structures"]
+            selected_domain = technical_domains[question_count % len(technical_domains)]
+            difficulty = current_difficulty
+            
             return {
                 "conversation_phase": "technical_question",
                 "current_round": "technical_deep_dive",
-                "next_action": "generate_question"
+                "next_action": "generate_question",
+                "selected_domain": selected_domain,
+                "difficulty": difficulty,
+                "orchestrator_intent": f"Test knowledge in {selected_domain}",
+                "question_context": {
+                    "domain": selected_domain,
+                    "difficulty": difficulty,
+                    "resume_context": "",
+                    "job_role": job_role,
+                    "round": "technical_deep_dive"
+                }
             }
         
         summary_points = resume_summary.get("summary_points", [])
@@ -335,10 +371,10 @@ DOMAIN: [Single domain name]
             "difficulty": difficulty,
             "orchestrator_intent": f"Test knowledge in {selected_domain}",
             "question_context": {
-                "domain": selected_domain,
-                "difficulty": difficulty,
+        "domain": selected_domain,
+        "difficulty": difficulty,
                 "resume_context": "",
-                "job_role": job_role,
+        "job_role": job_role,
                 "round": "technical_deep_dive"
             },
             "next_action": "generate_question",

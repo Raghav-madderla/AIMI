@@ -266,12 +266,21 @@ Would you like to get started? Just say "yes" when you're ready, or "no" if you 
             
             # Ensure next action is set to wait for user
             final_state["next_action"] = "evaluate"
-
-        return {
-            "state": final_state,
-            "evaluation": latest_evaluation,
-            "question": new_question_data
-        }
+            
+            return {
+                "state": final_state,
+                "evaluation": latest_evaluation,
+                "question": new_question_data
+            }
+        else:
+            # Handle error or missing question
+            error = question_response.get("error", "Unknown error") if question_response else "No question generated"
+            return {
+                "state": final_state,
+                "evaluation": latest_evaluation,
+                "question": None,
+                "error": error
+            }
 
 
 interview_service = InterviewService()

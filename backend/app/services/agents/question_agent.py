@@ -1,20 +1,22 @@
 import httpx
-from typing import Dict
+import json
+import re
+from typing import Dict, List
 from app.utils.langgraph_state import InterviewState
 from app.core.config import settings
+from app.services.local_llm_service import local_llm_service
 
 
 async def question_agent(state: InterviewState) -> Dict:
     """
-    Question Agent - Uses YOUR Hugging Face fine-tuned model ONLY to generate questions
+    Question Agent - Uses YOUR Hugging Face fine-tuned model to generate questions.
+    Now enhanced to generate "Dynamic Ground Truth" (Key Points) for evaluation.
     
     Receives context from Orchestrator:
     - domain: Skill/domain for the question
     - difficulty: easy/medium/hard
     - resume_context: Relevant resume chunks
     - job_role: Target job role
-    
-    Note: No fallback to other models - uses only your HF model
     """
     question_context = state.get("question_context")
     if not question_context:
@@ -31,7 +33,13 @@ async def question_agent(state: InterviewState) -> Dict:
     job_role = question_context.get("job_role", "")
     
     # Build prompt in Alpaca format (matching fine-tuning format)
-    instruction = "You are an expert interview question generator. Generate an interview question based on the parameters provided in the input."
+    instruction = """You are an expert interview question generator. Generate an interview question based on the parameters provided.
+    
+Return the response in strict JSON format with the following keys:
+- "question_text": The interview question.
+- "key_points": A list of 3-5 specific technical concepts or keywords required in a correct answer.
+- "complexity": The difficulty level (Easy/Medium/Hard).
+"""
     
     # Include resume context in input if available
     if resume_context:
@@ -78,7 +86,7 @@ async def question_agent(state: InterviewState) -> Dict:
                 json={
                     "inputs": prompt,
                     "parameters": {
-                        "max_new_tokens": 150,
+                        "max_new_tokens": 300,  # Increased for JSON
                         "temperature": 0.7,
                         "return_full_text": False
                     }
@@ -96,40 +104,77 @@ async def question_agent(state: InterviewState) -> Dict:
                 generated_text = str(result)
             
             # Clean up the generated text
-            # Remove the prompt if it was included in the response
-            question = generated_text.strip()
+            clean_text = generated_text.strip()
+            if "### Response:" in clean_text:
+                clean_text = clean_text.split("### Response:")[-1].strip()
             
-            # Remove prompt prefix if present (some models return full text)
-            if "### Response:" in question:
-                question = question.split("### Response:")[-1].strip()
+            # Attempt to parse JSON
+            question_data = {}
+            try:
+                # Try direct JSON parsing
+                question_data = json.loads(clean_text)
+            except json.JSONDecodeError:
+                # Try to find JSON block
+                json_match = re.search(r'\{[\s\S]*\}', clean_text)
+                if json_match:
+                    try:
+                        question_data = json.loads(json_match.group())
+                    except json.JSONDecodeError:
+                        pass
             
-            # Remove common special tokens from fine-tuned models
-            special_tokens = [
-                "<|end_of_text|>",
-                "<|endoftext|>",
-                "</s>",
-                "<eos>",
-                "[END]",
-                "<|im_end|>",
-                "###",
-            ]
+            question_text = question_data.get("question_text")
+            key_points = question_data.get("key_points", [])
+            complexity = question_data.get("complexity", difficulty)
+            
+            # Fallback: If JSON parsing failed or no question text
+            if not question_text:
+                print("Question Agent: Failed to parse JSON, treating output as raw text.")
+                # Treat the raw text as the question
+                question_text = clean_text
+                
+                # Remove special tokens
+                special_tokens = ["<|end_of_text|>", "<|endoftext|>", "</s>", "<eos>", "[END]", "<|im_end|>", "###"]
             for token in special_tokens:
-                question = question.replace(token, "")
+                    question_text = question_text.replace(token, "")
+                    question_text = question_text.strip()
+
+            # Dynamic Ground Truth Generation (Fallback if missing)
+            if not key_points:
+                print("Question Agent: Generating key points using Local LLM.")
+                key_points_prompt = f"""For the interview question below, identify 3-5 key technical concepts or keywords that a correct answer MUST include.
+                
+Question: "{question_text}"
+Domain: {domain}
+Job Role: {job_role}
+
+Return ONLY a JSON object with a "key_points" list.
+Example: {{"key_points": ["Concept A", "Concept B", "Concept C"]}}"""
+
+                messages = [
+                    {"role": "system", "content": "You are an expert technical interviewer."},
+                    {"role": "user", "content": key_points_prompt}
+                ]
+                
+                kp_result = local_llm_service.generate_json(messages, max_new_tokens=200)
+                key_points = kp_result.get("key_points", [])
             
-            # Remove any leading/trailing whitespace and newlines
-            question = question.strip()
-            
+            # Final safety check
+            final_question = question_text
+            if not final_question or not final_question.strip():
+                final_question = "Could you describe a challenging technical problem you solved recently?"
+                print("Question Agent: Generated empty question, using fallback.")
+
             return {
                 "question_agent_response": {
-                    "question": question,
+                    "question": final_question,
                     "domain": domain,
-                    "difficulty": difficulty,
+                    "difficulty": complexity,
                     "error": None
-                }
+                },
+                "current_question_key_points": key_points
             }
     
     except httpx.HTTPError as e:
-        # No fallback - return error if YOUR model fails
         error_msg = f"Hugging Face model error: {str(e)}"
         print(f"Question generation failed: {error_msg}")
         return {
@@ -139,7 +184,6 @@ async def question_agent(state: InterviewState) -> Dict:
             }
         }
     except Exception as e:
-        # No fallback - return error if YOUR model fails
         error_msg = f"Question generation error: {str(e)}"
         print(f"Question generation failed: {error_msg}")
         return {

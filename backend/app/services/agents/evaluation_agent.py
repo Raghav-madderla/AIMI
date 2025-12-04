@@ -29,9 +29,10 @@ async def evaluation_agent(state: InterviewState) -> Dict:
     domain = evaluation_context.get("domain", "")
     round_type = evaluation_context.get("round", "technical")
     difficulty = evaluation_context.get("difficulty", "medium")
+    key_points = state.get("current_question_key_points", [])
     
     # Build evaluation prompt
-    evaluation_prompt = f"""You are an expert interview evaluator. Evaluate the candidate's answer to an interview question.
+    evaluation_prompt = f"""You are a Senior Technical Interviewer. Evaluate the candidate's answer against the required key points using the rubric below.
 
 Job Role: {state.get('job_role', 'Unknown')}
 Round: {round_type.capitalize()}
@@ -41,26 +42,33 @@ Difficulty: {difficulty}
 Question:
 {question}
 
+Required Key Points (Ground Truth):
+{', '.join(key_points) if key_points else 'N/A - Evaluate based on general technical correctness'}
+
 Candidate's Answer:
 {answer}
 
-Please provide:
-1. A score from 0.0 to 1.0 (where 1.0 is excellent)
-2. Detailed feedback on the answer
-3. Strengths of the answer
-4. Areas for improvement
+### Evaluation Rubric:
+1. Accuracy (0-10): Are the key points mentioned and used correctly?
+2. Completeness (0-10): Did they cover all required key concepts?
+3. Clarity (0-10): Is the answer structured and easy to understand?
 
-Format your response as JSON with the following structure:
+Format your response as a strict JSON object:
 {{
     "score": <float between 0.0 and 1.0>,
-    "feedback_text": "<detailed feedback>",
+    "feedback_text": "<detailed feedback explaining the score>",
     "strengths": ["<strength1>", "<strength2>"],
-    "improvements": ["<improvement1>", "<improvement2>"]
+    "improvements": ["<improvement1>", "<improvement2>"],
+    "metrics": {{
+        "accuracy": <int 0-10>,
+        "completeness": <int 0-10>,
+        "clarity": <int 0-10>
+    }}
 }}"""
     
     try:
         messages = [
-            {"role": "system", "content": "You are an expert interview evaluator. Always respond with valid JSON in the exact format specified."},
+            {"role": "system", "content": "You are a Senior Technical Interviewer. Always respond with valid JSON."},
             {"role": "user", "content": evaluation_prompt}
         ]
         
@@ -70,19 +78,21 @@ Format your response as JSON with the following structure:
             # Fallback if JSON parsing fails
             response_text = local_llm_service.generate(messages, max_new_tokens=800, temperature=0.3)
             evaluation_result = {
-                "score": 0.7,
+                "score": 0.5,
                 "feedback_text": response_text,
                 "strengths": [],
-                "improvements": []
+                "improvements": [],
+                "metrics": {"accuracy": 5, "completeness": 5, "clarity": 5}
             }
         
         evaluation_data = {
-            "score": float(evaluation_result.get("score", 0.7)),
-            "feedback": {
-                "feedback_text": evaluation_result.get("feedback_text", ""),
-                "strengths": evaluation_result.get("strengths", []),
-                "improvements": evaluation_result.get("improvements", [])
-            },
+                "score": float(evaluation_result.get("score", 0.7)),
+                "feedback": {
+                    "feedback_text": evaluation_result.get("feedback_text", ""),
+                    "strengths": evaluation_result.get("strengths", []),
+                    "improvements": evaluation_result.get("improvements", [])
+                },
+            "metrics": evaluation_result.get("metrics", {"accuracy": 7, "completeness": 7, "clarity": 7}),
             "domain": domain,
             "question": question
         }
@@ -91,6 +101,7 @@ Format your response as JSON with the following structure:
             "evaluation_agent_response": {
                 "score": evaluation_data["score"],
                 "feedback": evaluation_data["feedback"],
+                "metrics": evaluation_data["metrics"],
                 "error": None
             },
             "evaluation_history": [evaluation_data],

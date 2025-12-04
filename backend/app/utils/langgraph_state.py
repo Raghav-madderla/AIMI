@@ -40,4 +40,5 @@ class InterviewState(TypedDict):
     resume_summary: Optional[dict]  # Structured summary from resume_summary_agent
     orchestrator_intent: Optional[str]  # What the orchestrator wants to ask about
     pending_question: Optional[str]  # Question waiting to be cleaned
+    current_question_key_points: Optional[List[str]]  # The required concepts for the current question
 

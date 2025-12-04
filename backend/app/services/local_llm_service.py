@@ -99,6 +99,15 @@ class LocalLLMService:
             skip_special_tokens=True
         )
         
+        # FIX: Remove <think>...</think> blocks from the output
+        if "<think>" in generated_text:
+            # First try to remove closed blocks
+            generated_text = re.sub(r'<think>.*?</think>', '', generated_text, flags=re.DOTALL)
+            
+            # If <think> remains (unclosed tag), remove everything from <think> onwards
+            if "<think>" in generated_text:
+                generated_text = re.sub(r'<think>.*', '', generated_text, flags=re.DOTALL)
+        
         return generated_text.strip()
     
     def generate_json(
