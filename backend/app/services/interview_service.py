@@ -194,91 +194,65 @@ Would you like to get started? Just say "yes" when you're ready, or "no" if you 
         domain: str,
         difficulty: str
     ) -> Dict:
-        """
-        Process user answer through the graph.
-        1. Update state with new answer.
-        2. Run workflow (Orchestrator -> Evaluate -> Orchestrator -> Question).
-        3. Return new question and evaluation.
-        """
+        """Evaluate a user's answer"""
         
-        # 1. Update State with new answer
-        current_messages = state.get("messages", [])
-        new_messages = current_messages + [{
-            "role": "user",
-            "content": answer
-        }]
+        print(f"CLEARING old question_agent_response before evaluation")
         
-        current_answers = state.get("user_answers", [])
-        new_answers = current_answers + [{
-            "answer": answer,
-            "question": question
-        }]
-        
-        # Prepare input state
-        input_state = {
+        # Set evaluation context and CLEAR old question response
+        evaluation_state = {
             **state,
-            "messages": new_messages,
-            "user_answers": new_answers,
-            "question_agent_response": None,  # Clear old response so Orchestrator generates a new one
-            # Note: We don't manually set 'evaluation_context' here anymore.
-            # The Orchestrator will detect the new answer and set it.
+            "question_agent_response": None,  # Clear old response!
+            "evaluation_context": {
+                "question": question,
+                "answer": answer,
+                "domain": domain,
+                "round": state.get("current_round", "technical"),
+                "difficulty": difficulty
+            },
+            "next_action": "evaluate"
         }
         
-        # 2. Invoke Workflow
-        # The graph will cycle: Orchestrator (sees new answer) -> EvaluationAgent -> Orchestrator -> QuestionAgent -> CleaningAgent -> Orchestrator (wait)
-        config = {"recursion_limit": 50}
-        final_state = await self.workflow.ainvoke(input_state, config)
+        # Call evaluation agent directly
+        updated_state = await evaluation_agent(evaluation_state)
         
-        # 3. Extract Results
-        # Evaluation should be in evaluation_history[-1]
-        evaluation_history = final_state.get("evaluation_history", [])
-        latest_evaluation = evaluation_history[-1] if evaluation_history else None
-        
-        # New Question should be in question_agent_response
-        question_response = final_state.get("question_agent_response")
-        new_question_data = None
-        
-        if question_response and question_response.get("question"):
-            new_question_data = {
-                "question_text": question_response["question"],
-                "domain": question_response.get("domain", ""),
-                "difficulty": question_response.get("difficulty", "medium"),
-                "round": final_state.get("current_round", "technical")
+        # Merge evaluation results
+        eval_response = updated_state.get("evaluation_agent_response")
+        if eval_response and not eval_response.get("error"):
+            score = eval_response.get("score", 0.5)
+            feedback = eval_response.get("feedback", {})
+            
+            evaluation_data = {
+                "score": score,
+                "feedback": feedback,
+                "domain": domain,
+                "question": question
             }
             
-            # Update messages with the assistant's new question
-            final_state["messages"] = final_state.get("messages", []) + [{
-                "role": "assistant",
-                "content": new_question_data["question_text"],
-                "metadata": new_question_data
-            }]
-            
-            # Update previous_questions
-            final_state["previous_questions"] = final_state.get("previous_questions", []) + [new_question_data]
-            final_state["question_count"] = final_state.get("question_count", 0) + 1
-            
-            # Update domain coverage
-            domain_coverage = final_state.get("domain_coverage", {}) or {}
-            q_domain = new_question_data.get("domain", "")
-            if q_domain:
-                domain_coverage[q_domain] = domain_coverage.get(q_domain, 0) + 1
-            final_state["domain_coverage"] = domain_coverage
-            
-            # Ensure next action is set to wait for user
-            final_state["next_action"] = "evaluate"
+            # Update state with evaluation
+            final_state = {
+                **evaluation_state,
+                **updated_state,
+                "evaluation_history": evaluation_state.get("evaluation_history", []) + [evaluation_data],
+                "user_answers": evaluation_state.get("user_answers", []) + [{"answer": answer}],
+                "messages": evaluation_state.get("messages", []) + [
+                    {
+                        "role": "user",
+                        "content": answer,
+                        "metadata": {"feedback": feedback, "score": score}
+                    }
+                ],
+                "next_action": "generate_question"  # Ready for next question
+            }
             
             return {
                 "state": final_state,
-                "evaluation": latest_evaluation,
-                "question": new_question_data
+                "evaluation": evaluation_data
             }
         else:
-            # Handle error or missing question
-            error = question_response.get("error", "Unknown error") if question_response else "No question generated"
+            error = eval_response.get("error", "Unknown error") if eval_response else "No response"
             return {
-                "state": final_state,
-                "evaluation": latest_evaluation,
-                "question": None,
+                "state": evaluation_state,
+                "evaluation": None,
                 "error": error
             }
 

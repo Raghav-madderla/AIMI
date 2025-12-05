@@ -17,40 +17,49 @@ async def question_cleaning_agent(
 ) -> Dict:
     """
     Cleans and refines the generated question to match orchestrator's intent
-    
-    Args:
-        generated_question: Question from the question gen model
-        resume_point: The specific resume point being discussed
-        orchestrator_intent: What the orchestrator wants to ask about
-        domain: The technical domain
-    
-    Returns:
-        {
-            "cleaned_question": "Refined question text",
-            "success": True/False
-        }
     """
     
-    prompt = f"""Blend this technical question with the candidate's resume context to create one natural interview question.
+    # New prompt focuses on SYNTHESIS rather than concatenation
+    prompt = f"""You are a Senior Technical Interviewer. Your goal is to rewrite a raw technical question to sound natural, conversational, and personalized based on the candidate's resume.
 
-Technical Question: {generated_question}
+INPUT DATA:
+- Raw Technical Question: "{generated_question}"
+- Candidate's Resume Context: "{resume_point[:400]}"
+- Target Domain: {domain}
+- Interviewer Goal: {orchestrator_intent}
 
-Resume Context: {resume_point[:300]}
+INSTRUCTIONS:
+Analyze the relationship between the Resume Context and the Raw Question, then rewrite the question using ONE of the following strategies:
 
-Domain: {domain}
+1. THE DEEP DIVE (If the resume context is highly relevant):
+   Instead of asking the generic question, ask how they applied that specific concept in their project.
+   *Bad:* "I see you used Python. What is a list comprehension?"
+   *Good:* "In your data preprocessing workflow, did you utilize list comprehensions for performance? How do they compare to standard loops in that context?"
 
-Create ONE question that:
-- Starts by acknowledging their resume experience
-- Then asks the technical question naturally
-- Sounds like a real interviewer
+2. THE BRIDGE (If the resume context is related but different):
+   Use their experience as a lead-in to test their broader knowledge.
+   *Bad:* "I see you built APIs. Explain AI."
+   *Good:* "Given your strong background in backend engineering, I'm curious about your understanding of AI concepts. How would you explain the difference between ML and Deep Learning to an API consumer?"
 
+3. THE PIVOT (If the resume context is unrelated):
+   Acknowledge the previous topic, then clearly signal a shift to a new domain.
+   *Bad:* "I see you did Data Science, tell me about System Design."
+   *Good:* "That's a solid background in Data Science. I'd like to switch gears and check your System Design knowledge. How would you architect..."
+
+CONSTRAINTS:
+- DO NOT start with "I see you..." or "I see that you..." (It sounds robotic).
+- DO NOT simply combine two unrelated sentences with a comma.
+- The output must be a SINGLE, coherent question (or a 2-sentence conversational flow).
+- Keep it professional but encouraging.
+
+Output ONLY the rewritten question.
 """
     
     try:
         messages = [
                 {
                     "role": "system",
-                    "content": "You are an expert at creating natural interview questions. Return ONLY the question, no explanations."
+                    "content": "You are an expert interviewer. Rewrite the input to be conversational and logical. Output only the final question text."
                 },
                 {
                     "role": "user",
@@ -58,7 +67,7 @@ Create ONE question that:
                 }
         ]
         
-        cleaned_question = await local_llm_service.generate_async(messages, max_new_tokens=1500, temperature=0.7)
+        cleaned_question = await local_llm_service.generate_async(messages, max_new_tokens=250, temperature=0.7)
         
         # Handle None response
         if cleaned_question is None or not cleaned_question.strip():
@@ -70,32 +79,15 @@ Create ONE question that:
             }
         
         # Clean up the response aggressively
-        # Remove quotes
         cleaned_question = cleaned_question.strip('"\'')
         
-        # Take only the first sentence or up to first question mark
-        if '?' in cleaned_question:
-            # Include everything up to and including the first question mark
-            cleaned_question = cleaned_question.split('?')[0] + '?'
-        else:
-            # If no question mark, take first line
-            cleaned_question = cleaned_question.split('\n')[0]
-        
-        # Remove any meta-commentary
-        meta_phrases = [
-            "Here's",
-            "Here is",
-            "The question",
-            "This question",
-            "Example:",
-            "Format:",
-        ]
-        for phrase in meta_phrases:
-            if cleaned_question.startswith(phrase):
-                # Skip to after the first colon if present
-                if ':' in cleaned_question:
-                    cleaned_question = cleaned_question.split(':', 1)[1].strip()
-        
+        # Remove common chat prefixes if the model ignores system prompt
+        prefixes_to_remove = ["Here is the rewritten question:", "Rewritten Question:", "Answer:"]
+        for prefix in prefixes_to_remove:
+            if cleaned_question.lower().startswith(prefix.lower()):
+                cleaned_question = cleaned_question[len(prefix):].strip()
+
+        # Final cleanup of formatting
         cleaned_question = cleaned_question.strip()
         
         return {
