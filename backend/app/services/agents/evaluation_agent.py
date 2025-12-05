@@ -30,14 +30,8 @@ async def evaluation_agent(state: InterviewState) -> Dict:
     round_type = evaluation_context.get("round", "technical")
     difficulty = evaluation_context.get("difficulty", "medium")
     
-    # Build evaluation prompt with Implicit Rubric Generation
-    evaluation_prompt = f"""You are a Senior Technical Interviewer. Perform a two-step evaluation process:
-
-**Step 1: Implicit Rubric Generation**
-Analyze the interview question and identify 3-5 Key Technical Concepts (Ground Truth) that a perfect answer MUST include. These are the essential concepts, principles, or knowledge areas required for a correct answer.
-
-**Step 2: Evaluation**
-Evaluate the candidate's answer strictly against the key points you identified in Step 1.
+    # Build evaluation prompt
+    evaluation_prompt = f"""You are an expert interview evaluator. Evaluate the candidate's answer to an interview question.
 
 Job Role: {state.get('job_role', 'Unknown')}
 Round: {round_type.capitalize()}
@@ -50,89 +44,55 @@ Question:
 Candidate's Answer:
 {answer}
 
-### Evaluation Rubric:
-1. Accuracy (0-10): Are the identified key points mentioned and used correctly in the answer?
-2. Completeness (0-10): Did the candidate cover all identified key concepts?
-3. Clarity (0-10): Is the answer structured and easy to understand?
+Please provide:
+1. A score from 0.0 to 1.0 (where 1.0 is excellent)
+2. Detailed feedback on the answer
+3. Strengths of the answer
+4. Areas for improvement
 
-Format your response as a strict JSON object:
+Format your response as JSON with the following structure:
 {{
-    "identified_key_points": ["<concept1>", "<concept2>", "<concept3>", "<concept4>", "<concept5>"],
     "score": <float between 0.0 and 1.0>,
-    "feedback_text": "<detailed feedback explaining the score and how the answer relates to the key points>",
+    "feedback_text": "<detailed feedback>",
     "strengths": ["<strength1>", "<strength2>"],
-    "improvements": ["<improvement1>", "<improvement2>"],
-    "metrics": {{
-        "accuracy": <int 0-10>,
-        "completeness": <int 0-10>,
-        "clarity": <int 0-10>
-    }}
+    "improvements": ["<improvement1>", "<improvement2>"]
 }}"""
     
     try:
         messages = [
-            {"role": "system", "content": "You are a Senior Technical Interviewer. Always respond with valid JSON."},
+            {"role": "system", "content": "You are an expert interview evaluator. Always respond with valid JSON in the exact format specified."},
             {"role": "user", "content": evaluation_prompt}
         ]
         
-        evaluation_result = local_llm_service.generate_json(messages, max_new_tokens=1000, temperature=0.3)
+        evaluation_result = await local_llm_service.generate_json_async(messages, max_new_tokens=800, temperature=0.3)
         
         if not evaluation_result:
             # Fallback if JSON parsing fails
-            response_text = local_llm_service.generate(messages, max_new_tokens=1000, temperature=0.3)
+            response_text = await local_llm_service.generate_async(messages, max_new_tokens=800, temperature=0.3)
             evaluation_result = {
-                "identified_key_points": ["Technical Correctness", "Problem Solving", "Communication"],
-                "score": 0.5,
+                "score": 0.7,
                 "feedback_text": response_text,
                 "strengths": [],
-                "improvements": [],
-                "metrics": {"accuracy": 5, "completeness": 5, "clarity": 5}
+                "improvements": []
             }
         
-        # Extract identified key points (from implicit rubric generation)
-        identified_key_points = evaluation_result.get("identified_key_points", [])
-        
-        evaluation_data = {
-            "score": float(evaluation_result.get("score", 0.7)),
-            "feedback": {
-                "feedback_text": evaluation_result.get("feedback_text", ""),
-                "strengths": evaluation_result.get("strengths", []),
-                "improvements": evaluation_result.get("improvements", [])
-            },
-            "metrics": evaluation_result.get("metrics", {"accuracy": 7, "completeness": 7, "clarity": 7}),
-            "identified_key_points": identified_key_points,  # Store the implicitly generated rubric
-            "domain": domain,
-            "question": question
-        }
-
         return {
             "evaluation_agent_response": {
-                "score": evaluation_data["score"],
-                "feedback": evaluation_data["feedback"],
-                "metrics": evaluation_data["metrics"],
-                "identified_key_points": identified_key_points,  # Include in response
+                "score": float(evaluation_result.get("score", 0.7)),
+                "feedback": {
+                    "feedback_text": evaluation_result.get("feedback_text", ""),
+                    "strengths": evaluation_result.get("strengths", []),
+                    "improvements": evaluation_result.get("improvements", [])
+                },
                 "error": None
-            },
-            "evaluation_history": [evaluation_data],
-            "next_action": "orchestrate"
+            }
         }
     
     except Exception as e:
-        # Add a placeholder evaluation to avoid infinite loops
-        evaluation_data = {
-            "score": 0.0,
-            "feedback": {"error": str(e)},
-            "identified_key_points": [],
-            "domain": domain,
-            "question": question
-        }
         return {
             "evaluation_agent_response": {
                 "error": f"Error evaluating answer: {str(e)}",
                 "feedback": None,
-                "score": None,
-                "identified_key_points": []
-            },
-            "evaluation_history": [evaluation_data],
-            "next_action": "orchestrate"
+                "score": None
+            }
         }

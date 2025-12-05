@@ -31,31 +31,26 @@ async def question_cleaning_agent(
         }
     """
     
-    prompt = f"""You are refining an interview question to make it more contextual and relevant.
+    prompt = f"""Blend this technical question with the candidate's resume context to create one natural interview question.
 
-Resume Point: {resume_point}
+Technical Question: {generated_question}
 
-Interviewer's Intent: {orchestrator_intent}
+Resume Context: {resume_point[:300]}
 
 Domain: {domain}
 
-Generated Question: {generated_question}
+Create ONE question that:
+- Starts by acknowledging their resume experience
+- Then asks the technical question naturally
+- Sounds like a real interviewer
 
-Refine this question to:
-1. Be conversational and natural (like a hiring manager would ask)
-2. Reference the resume point when relevant
-3. Match the interviewer's intent
-4. Stay focused on the domain
-5. Be clear and specific
-
-Return ONLY the refined question, nothing else.
 """
     
     try:
         messages = [
                 {
                     "role": "system",
-                    "content": "You are an expert at refining interview questions to be natural and contextual."
+                    "content": "You are an expert at creating natural interview questions. Return ONLY the question, no explanations."
                 },
                 {
                     "role": "user",
@@ -63,13 +58,45 @@ Return ONLY the refined question, nothing else.
                 }
         ]
         
-        cleaned_question = local_llm_service.generate(messages, max_new_tokens=200, temperature=0.7)
+        cleaned_question = await local_llm_service.generate_async(messages, max_new_tokens=1500, temperature=0.7)
         
-        # Remove quotes if present
-        if cleaned_question.startswith('"') and cleaned_question.endswith('"'):
-            cleaned_question = cleaned_question[1:-1]
-        if cleaned_question.startswith("'") and cleaned_question.endswith("'"):
-            cleaned_question = cleaned_question[1:-1]
+        # Handle None response
+        if cleaned_question is None or not cleaned_question.strip():
+            print("Question cleaning returned None or empty, using original question")
+            return {
+                "cleaned_question": generated_question,
+                "success": False,
+                "error": "LLM returned empty response"
+            }
+        
+        # Clean up the response aggressively
+        # Remove quotes
+        cleaned_question = cleaned_question.strip('"\'')
+        
+        # Take only the first sentence or up to first question mark
+        if '?' in cleaned_question:
+            # Include everything up to and including the first question mark
+            cleaned_question = cleaned_question.split('?')[0] + '?'
+        else:
+            # If no question mark, take first line
+            cleaned_question = cleaned_question.split('\n')[0]
+        
+        # Remove any meta-commentary
+        meta_phrases = [
+            "Here's",
+            "Here is",
+            "The question",
+            "This question",
+            "Example:",
+            "Format:",
+        ]
+        for phrase in meta_phrases:
+            if cleaned_question.startswith(phrase):
+                # Skip to after the first colon if present
+                if ':' in cleaned_question:
+                    cleaned_question = cleaned_question.split(':', 1)[1].strip()
+        
+        cleaned_question = cleaned_question.strip()
         
         return {
             "cleaned_question": cleaned_question,

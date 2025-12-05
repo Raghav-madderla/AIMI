@@ -98,7 +98,7 @@ Format as JSON with keys: overall_summary, strengths (array), areas_for_improvem
 """
     
     try:
-        print(f"Generating report with local Qwen model")
+        print(f"Generating report with Hugging Face API")
         messages = [
                 {
                     "role": "system",
@@ -110,8 +110,8 @@ Format as JSON with keys: overall_summary, strengths (array), areas_for_improvem
                 }
         ]
         
-        analysis = local_llm_service.generate_json(messages, max_new_tokens=2000, temperature=0.7)
-        print(f"Local LLM response received")
+        analysis = await local_llm_service.generate_json_async(messages, max_new_tokens=2000, temperature=0.7)
+        print(f"API response received")
         
         if not analysis:
             # Fallback if JSON parsing fails

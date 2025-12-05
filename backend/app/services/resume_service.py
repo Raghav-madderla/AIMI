@@ -391,7 +391,7 @@ Response:"""
                 {"role": "user", "content": prompt}
             ]
             
-            result = local_llm_service.generate_json(messages, max_new_tokens=200, temperature=0.3)
+            result = await local_llm_service.generate_json_async(messages, max_new_tokens=200, temperature=0.3)
             
             if result:
                 # Extract domains array from JSON object
@@ -521,7 +521,17 @@ Response:"""
             job_role=job_role
         )
         
-        resume_summary = resume_summary_result.get("summary", {})
+        # Check if summary generation was successful
+        if resume_summary_result and not resume_summary_result.get("error"):
+            # If 'success' key exists and is False, use the fallback summary
+            if resume_summary_result.get("success") is False:
+                resume_summary = resume_summary_result.get("summary_points", [])
+            else:
+                # Direct return from successful generation
+                resume_summary = resume_summary_result
+        else:
+            print(f"Resume summary generation failed: {resume_summary_result.get('error', 'Unknown error')}")
+            resume_summary = {}
         
         # Save resume metadata to database with file hash
         resume = Resume(

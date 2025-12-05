@@ -32,61 +32,56 @@ async def resume_summary_agent(resume_text: str, job_role: str) -> Dict:
         }
     """
     
-    prompt = f"""You are an expert hiring manager reviewing a resume for a {job_role} position.
-
-Analyze the following resume and create a structured summary with key talking points for the interview.
-
-Resume:
-{resume_text[:3000]}
-
-Create a JSON response with:
-1. summary_points: Array of 5-7 key achievements/experiences to discuss
-   - Each point should have: "point" (brief description), "domains" (technical areas), "significance" (high/medium/low), "talking_angle" (what to ask about it)
-2. overall_impression: A brief professional summary of the candidate
-3. key_strengths: 3-5 main strengths based on the resume
-
-Format your response as valid JSON.
-"""
+    # Simplified approach - create a basic summary without LLM
+    # The LLM often fails to return proper JSON for complex summaries
+    print(f"Generating resume summary for {job_role}")
     
-    try:
-        messages = [
-                {
-                    "role": "system",
-                    "content": "You are an expert hiring manager. Analyze resumes and create structured interview talking points."
-                },
-                {
-                    "role": "user",
-                    "content": prompt
-                }
-        ]
+    # Extract key points from resume text
+    lines = resume_text[:2000].split('\n')
+    experience_keywords = ['experience', 'work', 'project', 'developed', 'built', 'designed', 'implemented']
+    skill_keywords = ['python', 'machine learning', 'data', 'sql', 'nlp', 'deep learning', 'ai']
+    
+    # Find relevant lines
+    key_points = []
+    skills_found = set()
+    
+    for line in lines:
+        line_lower = line.lower()
+        # Check for experience mentions
+        if any(kw in line_lower for kw in experience_keywords) and len(line.strip()) > 20:
+            key_points.append(line.strip()[:200])
         
-        summary = local_llm_service.generate_json(messages, max_new_tokens=1500, temperature=0.7)
-        
-        if summary:
-            return summary
-        else:
-            return {
-                "success": False,
-                "summary": None,
-                "error": "Failed to parse JSON response"
-            }
-        
-    except Exception as e:
-        print(f"Resume summary failed: {str(e)}")
-        # Fallback: Create basic summary
-        return {
-            "success": False,
-            "summary": {
-                "summary_points": [
+        # Check for skills
+        for skill in skill_keywords:
+            if skill in line_lower:
+                skills_found.add(skill.title())
+    
+    # Create structured summary
+    summary_points = []
+    for i, point in enumerate(key_points[:5]):  # Limit to 5 points
+        summary_points.append({
+            "point": point,
+            "domains": list(skills_found)[:3] if skills_found else ["General"],
+            "significance": "high" if i < 2 else "medium",
+            "talking_angle": f"Tell me more about this experience"
+        })
+    
+    # If no points found, create generic one
+    if not summary_points:
+        summary_points = [
                     {
-                        "point": "General experience discussion",
-                        "domains": ["General"],
+                "point": "Professional experience and background",
+                "domains": list(skills_found)[:3] if skills_found else ["General"],
                         "significance": "medium",
-                        "talking_angle": "Tell me about your experience"
+                "talking_angle": "Tell me about your key experiences"
                     }
-                ],
-                "overall_impression": "Experienced candidate",
-                "key_strengths": ["Technical skills", "Problem solving"]
-            },
-            "error": str(e)
-        }
+        ]
+    
+    result = {
+        "summary_points": summary_points,
+        "overall_impression": f"Candidate with background relevant to {job_role}",
+        "key_strengths": list(skills_found)[:5] if skills_found else ["Technical skills", "Problem solving"]
+    }
+    
+    print(f"Resume summary generated: {len(summary_points)} points found")
+    return result

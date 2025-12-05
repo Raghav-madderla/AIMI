@@ -31,30 +31,12 @@ async def orchestrator_agent(state: InterviewState) -> Dict:
     current_round = state.get("current_round", "welcome")
     job_role = state.get("job_role", "")
     
-    user_answers = state.get("user_answers", [])
-    evaluation_history = state.get("evaluation_history", [])
-
-    # 1. Detection of New Answers
-    if len(user_answers) > len(evaluation_history):
-        print(f"New answer detected! user_answers={len(user_answers)}, eval_history={len(evaluation_history)}")
-        
-        # Prepare evaluation context
-        last_answer = user_answers[-1] if user_answers else {}
-        last_answer_text = last_answer.get("answer", "")
-        
-        previous_questions = state.get("previous_questions", [])
-        last_question_data = previous_questions[-1] if previous_questions else {}
-        
-        return {
-            "next_action": "evaluate",
-            "evaluation_context": {
-                "question": last_question_data.get("question_text", ""),
-                "answer": last_answer_text,
-                "domain": last_question_data.get("domain", "General"),
-                "round": state.get("current_round", "technical"),
-                "difficulty": last_question_data.get("difficulty", "medium")
-            }
-        }
+    # DEBUG: Log current state
+    print(f"ORCHESTRATOR DEBUG:")
+    print(f"  conversation_phase: {conversation_phase}")
+    print(f"  question_count: {question_count}")
+    print(f"  current_round: {current_round}")
+    print(f"  resume_summary exists: {resume_summary is not None}")
     
     # Check if we just generated a question and it's waiting to be sent
     question_agent_response = state.get("question_agent_response")
@@ -83,44 +65,6 @@ async def orchestrator_agent(state: InterviewState) -> Dict:
                 "status": "error"
             }
     
-    # 2. Adaptive Logic (The "Smart" Feature)
-    # Retrieve the last score and metrics to adjust difficulty
-    evaluation_history = state.get("evaluation_history", [])
-    current_difficulty = state.get("difficulty", "medium")
-    
-    if len(evaluation_history) >= 2:
-        # Analyze last 2 evaluations
-        recent_evals = evaluation_history[-2:]
-        accuracies = []
-        for eval_data in recent_evals:
-            metrics = eval_data.get("metrics", {})
-            accuracy = metrics.get("accuracy", 0)
-            accuracies.append(accuracy)
-            
-        avg_accuracy = sum(accuracies) / len(accuracies)
-        print(f"ADAPTIVE LOGIC: Last 2 Accuracies: {accuracies}, Avg: {avg_accuracy}")
-        
-        if avg_accuracy > 8:
-            current_difficulty = "hard"
-            print("Performance is high. Increasing difficulty to Hard.")
-        elif avg_accuracy < 4:
-            current_difficulty = "easy"
-            print("Performance is struggling. Decreasing difficulty to Easy.")
-        else:
-            # Keep current difficulty
-            pass
-    elif evaluation_history:
-        # Fallback for single history item (keep existing logic)
-        last_eval = evaluation_history[-1]
-        last_score = last_eval.get("score", 0.7)
-        
-        if last_score < 0.6:
-            current_difficulty = "easy"
-        elif last_score > 0.85:
-            current_difficulty = "hard"
-            
-    print(f"ADAPTIVE LOGIC: New Difficulty set to {current_difficulty}")
-    
     # GREETING PHASE
     if conversation_phase == "greeting":
         # This is handled in interview_service.generate_welcome_message
@@ -146,28 +90,38 @@ async def orchestrator_agent(state: InterviewState) -> Dict:
             print(f"GENERATING intro question (question_count = 0)")
             
             # Generate a warm intro question using local LLM
-            prompt = f"""You are AIMI, a friendly AI hiring manager conducting an interview for a {job_role} position.
+            prompt = f"""Generate ONE interview question for a {job_role} position asking the candidate to introduce themselves.
 
-Generate a warm, conversational follow-up after your initial greeting. Ask the candidate to introduce themselves.
+Requirements:
+- Be warm and conversational
+- Ask about their journey and what excites them about the role
+- Return ONLY the question text
+- No explanations, no additional text
 
-Keep it natural and friendly, like: "To get started, I'd love to hear about your journey. Could you tell me a bit about yourself and what excites you about this role?"
-
-Return ONLY the question, nothing else."""
+Question:"""
 
             try:
                 messages = [
-                        {"role": "system", "content": "You are AIMI, a friendly AI interviewer."},
+                        {"role": "system", "content": "You are a professional interview question generator. Return only the question, nothing else."},
                         {"role": "user", "content": prompt}
                 ]
                 
-                # Increased tokens to allow for thinking + response
-                intro_question = local_llm_service.generate(messages, max_new_tokens=300, temperature=0.8)
+                intro_question = await local_llm_service.generate_async(messages, max_new_tokens=100, temperature=0.7)
+                
+                # Clean up any extra text (take only the first sentence or up to first newline)
+                intro_question = intro_question.split('\n')[0].strip()
+                # Remove quotes if present
+                intro_question = intro_question.strip('"\'')
+                
+                # Fallback if empty
+                if not intro_question or len(intro_question) < 10:
+                    intro_question = "To get started, could you tell me a bit about yourself and what excites you about this role?"
                 
                 return {
                     "question_agent_response": {
                         "question": intro_question,
                         "domain": "Introduction",
-                        "difficulty": current_difficulty,
+                        "difficulty": "easy",
                         "error": None
                     },
                     "next_action": "wait",
@@ -180,7 +134,7 @@ Return ONLY the question, nothing else."""
                     "question_agent_response": {
                         "question": "Thank you for joining! To get started, could you tell me a bit about yourself and what excites you about this role?",
                         "domain": "Introduction",
-                        "difficulty": current_difficulty,
+                        "difficulty": "easy",
                         "error": None
                     },
                     "next_action": "wait",
@@ -191,32 +145,18 @@ Return ONLY the question, nothing else."""
     if conversation_phase == "resume_point":
         print(f"RESUME DISCUSSION PHASE")
         
-        # Check if we have resume summary
-        if not resume_summary:
-            print(f"No resume summary, skipping to technical")
-            
-            # PREPARE THE FIRST TECHNICAL QUESTION IMMEDIATELY
-            technical_domains = ["Python", "System Design", "Machine Learning", "SQL", "Data Structures"]
-            selected_domain = technical_domains[question_count % len(technical_domains)]
-            difficulty = current_difficulty
-            
+        # Check if we have resume summary and summary points
+        summary_points = resume_summary.get("summary_points", []) if resume_summary else []
+        
+        if not resume_summary or not summary_points or len(summary_points) == 0:
+            print(f"No resume summary or no summary points ({len(summary_points)}), skipping to technical")
+            # Skip to technical if no resume summary
             return {
                 "conversation_phase": "technical_question",
                 "current_round": "technical_deep_dive",
-                "next_action": "generate_question",
-                "selected_domain": selected_domain,
-                "difficulty": difficulty,
-                "orchestrator_intent": f"Test knowledge in {selected_domain}",
-                "question_context": {
-                    "domain": selected_domain,
-                    "difficulty": difficulty,
-                    "resume_context": "",
-                    "job_role": job_role,
-                    "round": "technical_deep_dive"
-                }
+                "next_action": "generate_question"
             }
         
-        summary_points = resume_summary.get("summary_points", [])
         print(f"Resume has {len(summary_points)} summary points")
         print(f"Current index: {current_resume_point_index}")
         
@@ -253,52 +193,20 @@ Return ONLY the question, nothing else."""
             }
         
         # Orchestrator decides what to ask about this point
-        prompt = f"""You are AIMI, a hiring manager reviewing a candidate's resume for a {job_role} position.
-
-You're discussing this achievement from their resume:
-"{point_text}"
-
-Relevant technical areas: {', '.join(domains)}
-
-What you want to explore: {talking_angle}
-
-Your task:
-1. Make a brief, warm comment appreciating this achievement (1 sentence)
-2. Decide what specific aspect you want to ask about (be specific)
-3. Identify the PRIMARY technical domain to focus on (choose ONE from: {', '.join(domains)})
-
-Respond in this EXACT format:
-COMMENT: [Your appreciative comment]
-INTENT: [What you want to ask about - be specific]
-DOMAIN: [Single domain name]
-"""
-
+        # Simplified approach - skip LLM parsing, create directly
         try:
-            messages = [
-                    {"role": "system", "content": "You are an expert hiring manager."},
-                    {"role": "user", "content": prompt}
-            ]
-            
-            orchestrator_response = local_llm_service.generate(messages, max_new_tokens=300, temperature=0.7)
-            
-            # Parse response
-            comment = ""
-            intent = ""
+            # Create a simple comment and intent
+            comment = f"I see you have experience with {point_text[:100]}."
+            intent = f"Tell me more about your work with {domains[0] if domains else 'this area'}."
             domain = domains[0] if domains else "General"
             
-            for line in orchestrator_response.split('\n'):
-                if line.startswith("COMMENT:"):
-                    comment = line.replace("COMMENT:", "").strip()
-                elif line.startswith("INTENT:"):
-                    intent = line.replace("INTENT:", "").strip()
-                elif line.startswith("DOMAIN:"):
-                    domain = line.replace("DOMAIN:", "").strip()
+            # Determine difficulty based on significance
+            difficulty_map = {"high": "hard", "medium": "medium", "low": "easy"}
+            difficulty = difficulty_map.get(significance, "medium")
             
-            # Determine difficulty based on significance and adaptive logic
-            # We prioritize adaptive difficulty if it's set to something specific, 
-            # but for resume points, maybe we should respect the significance too?
-            # For now, let's use the adaptive difficulty as the base.
-            difficulty = current_difficulty
+            # Ensure domain is valid (not a placeholder)
+            if not domain or domain in ["[insert here]", "General"]:
+                domain = domains[0] if domains else "Data Analysis"
             
             print(f"Orchestrator Decision:")
             print(f"   Comment: {comment}")
@@ -308,6 +216,8 @@ DOMAIN: [Single domain name]
             print(f"   Moving to next resume point: {current_resume_point_index} -> {current_resume_point_index + 1}")
             
             # Store orchestrator's intent and comment for later use
+            # Note: question_context only has domain + difficulty (for question agent)
+            # resume_context is stored separately for cleaning agent
             return {
                 "orchestrator_intent": f"{comment} {intent}",
                 "selected_domain": domain,
@@ -315,11 +225,8 @@ DOMAIN: [Single domain name]
                 "question_context": {
                     "domain": domain,
                     "difficulty": difficulty,
-                    "resume_context": point_text,
-                    "job_role": job_role,
                     "round": "resume_discussion",
-                    "orchestrator_comment": comment,
-                    "orchestrator_intent": intent
+                    "resume_context": point_text  # Stored here for cleaning agent only
                 },
                 "current_resume_point_index": current_resume_point_index + 1,  # Move to next point AFTER this question
                 "next_action": "generate_question",
@@ -329,16 +236,16 @@ DOMAIN: [Single domain name]
         except Exception as e:
             print(f"Orchestrator planning failed: {str(e)}")
             # Fallback: Generate a simple question
+            domain_fallback = domains[0] if domains else "Data Analysis"
             return {
-                "orchestrator_intent": f"Tell me more about: {point_text}",
-                "selected_domain": domains[0] if domains else "General",
-                "difficulty": current_difficulty,
+                "orchestrator_intent": f"Tell me more about: {point_text[:100]}",
+                "selected_domain": domain_fallback,
+                "difficulty": "medium",
                 "question_context": {
-                    "domain": domains[0] if domains else "General",
-                    "difficulty": current_difficulty,
-                    "resume_context": point_text,
-                    "job_role": job_role,
-                    "round": "resume_discussion"
+                    "domain": domain_fallback,
+                    "difficulty": "medium",
+                    "round": "resume_discussion",
+                    "resume_context": point_text  # For cleaning agent only
                 },
                 "current_resume_point_index": current_resume_point_index + 1,
                 "next_action": "generate_question",
@@ -358,23 +265,53 @@ DOMAIN: [Single domain name]
                 "next_action": "complete"
             }
         
-        # Select a technical domain (could be from resume or general)
-        # For now, cycle through common domains
-        technical_domains = ["Python", "System Design", "Machine Learning", "SQL", "Data Structures"]
+        # Select technical domains from resume summary if available
+        technical_domains = []
+        if resume_summary:
+            # Extract domains from summary points
+            summary_points = resume_summary.get("summary_points", [])
+            for point in summary_points:
+                point_domains = point.get("domains", [])
+                technical_domains.extend(point_domains)
+            
+            # Also add key strengths if they look like domains
+            key_strengths = resume_summary.get("key_strengths", [])
+            technical_domains.extend(key_strengths)
+            
+            # Deduplicate
+            technical_domains = list(set(technical_domains))
+        
+        # Fallback to common domains if none found
+        if not technical_domains:
+            technical_domains = ["Python", "System Design", "Machine Learning", "SQL", "Data Analysis"]
+        
+        print(f"Technical domains from resume: {technical_domains}")
+        
+        # Cycle through domains
         selected_domain = technical_domains[question_count % len(technical_domains)]
         
-        # Use adaptive difficulty
-        difficulty = current_difficulty
+        # Adjust difficulty based on performance
+        evaluation_history = state.get("evaluation_history", [])
+        difficulty = state.get("difficulty", "medium")
+        
+        if len(evaluation_history) >= 2:
+            recent_scores = [eval.get("score", 0.5) for eval in evaluation_history[-3:]]
+            avg_score = sum(recent_scores) / len(recent_scores)
+            
+            if avg_score > 0.8 and difficulty != "hard":
+                difficulty = "hard"
+            elif avg_score < 0.5 and difficulty != "easy":
+                difficulty = "easy"
+        
+        print(f"Selected domain for Q{question_count}: {selected_domain}, difficulty: {difficulty}")
         
         return {
             "selected_domain": selected_domain,
             "difficulty": difficulty,
-            "orchestrator_intent": f"Test knowledge in {selected_domain}",
+            "orchestrator_intent": f"Assess {selected_domain} skills",
             "question_context": {
         "domain": selected_domain,
         "difficulty": difficulty,
-                "resume_context": "",
-        "job_role": job_role,
                 "round": "technical_deep_dive"
             },
             "next_action": "generate_question",

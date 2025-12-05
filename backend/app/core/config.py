@@ -1,25 +1,16 @@
 """
 Application Configuration
 
-All settings are defined here with defaults. You can:
-1. Modify values directly in this file
-2. Override via environment variables (optional)
-3. Create a .env file (optional)
-
-No environment variables are required - everything has defaults.
+All settings are defined here directly in this file.
+Modify the values below to configure your application.
+No .env file or environment variables needed.
 """
 
-from pydantic_settings import BaseSettings
+from pydantic import BaseModel, field_validator
 from typing import List, Union, Optional
-from pydantic import field_validator
-from pathlib import Path
-import os
-
-# Get the backend directory
-BACKEND_DIR = Path(__file__).parent.parent.parent
 
 
-class Settings(BaseSettings):
+class Settings(BaseModel):
     # ============================================
     # DATABASE CONFIGURATION
     # ============================================
@@ -29,29 +20,37 @@ class Settings(BaseSettings):
     # PINECONE VECTOR DB CONFIGURATION
     # ============================================
     # Set your Pinecone API key here (or via env variable)
+
     PINECONE_API_KEY: str = ""  # TODO: Set your Pinecone API key here 
     PINECONE_ENVIRONMENT: str = "us-east-1"  # or "us-west1" depending on your index
     PINECONE_INDEX_NAME: str = "resumes"
     PINECONE_DIMENSION: int = 1024  # Dimension for Qwen3-Embedding-0.6B (will be auto-detected)
     
     # ============================================
-    # EMBEDDING MODEL CONFIGURATION (Local Qwen)
+    # EMBEDDING MODEL CONFIGURATION
     # ============================================
-    EMBEDDING_MODEL: str = "Qwen/Qwen3-Embedding-0.6B"  # Local Qwen embedding model
-    EMBEDDING_DIMENSION: int = 1024  # Dimension for Qwen3-Embedding-0.6B (will be auto-detected)
+    EMBEDDING_MODEL: str = "Qwen/Qwen3-Embedding-0.6B"  # Only used if HF API not configured
+    EMBEDDING_DIMENSION: int = 1024  # Dimension for embeddings (will be auto-detected)
     
     # ============================================
-    # HUGGING FACE API CONFIGURATION (Question Agent)
+    # HUGGING FACE API CONFIGURATION
     # ============================================
-    # Optional: Only needed if using HuggingFace API for question generation
-    # If empty, the system will use local models instead
-    HUGGINGFACE_API_URL: str = ""  # TODO: Set your HuggingFace API URL here if needed
-    HUGGINGFACE_API_KEY: str = ""  # TODO: Set your HuggingFace API key here if needed
+    # Question generation model (fine-tuned for interview questions)
+    HUGGINGFACE_API_URL: str = ""  # TODO: Set your HuggingFace API URL here
+    HUGGINGFACE_API_KEY: str = ""  # TODO: Set your HuggingFace API key here
+    
+    # LLM API (for evaluation, cleaning, orchestrator, etc.)
+    HUGGINGFACE_LLM_API_URL: str = ""  # TODO: Set your HuggingFace LLM API URL here
+    HUGGINGFACE_LLM_API_KEY: str = ""  # TODO: Set your HuggingFace LLM API key here
+    
+    # Embedding API
+    HUGGINGFACE_EMBEDDING_API_URL: str = ""  # TODO: Set your HuggingFace Embedding API URL here
+    HUGGINGFACE_EMBEDDING_API_KEY: str = ""  # TODO: Set your HuggingFace Embedding API key here
     
     # ============================================
-    # LOCAL LLM MODEL CONFIGURATION
+    # LOCAL LLM MODEL CONFIGURATION (Deprecated - using HF API instead)
     # ============================================
-    LOCAL_LLM_MODEL: str = "Qwen/Qwen3-0.6B"  # Local Qwen model for text generation
+    LOCAL_LLM_MODEL: str = "Qwen/Qwen3-0.6B"  # Only used if HF API not configured
     
     # ============================================
     # OPENAI API (DEPRECATED - No longer used)
@@ -87,12 +86,6 @@ class Settings(BaseSettings):
             return [origin.strip() for origin in v.split(",") if origin.strip()]
         return v
     
-    class Config:
-        # Optional: Load from .env if it exists, but don't require it
-        env_file = str(BACKEND_DIR / ".env") if (BACKEND_DIR / ".env").exists() else None
-        env_file_encoding = "utf-8"
-        case_sensitive = True
-        extra = "ignore"  # Allow extra env vars without validation errors
 
-
+# Create settings instance - all configuration is in this file
 settings = Settings()

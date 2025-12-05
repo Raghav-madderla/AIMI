@@ -1,18 +1,20 @@
-import httpx
+import logging
 from typing import Dict
 from app.utils.langgraph_state import InterviewState
-from app.core.config import settings
+from app.services.question_gen_service import question_gen_service
 
+# Configure logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 async def question_agent(state: InterviewState) -> Dict:
     """
-    Question Agent - Uses YOUR Hugging Face fine-tuned model to generate questions.
-    Now enhanced to generate "Dynamic Ground Truth" (Key Points) for evaluation.
+    Question Agent - Uses the fine-tuned question generation model.
     
     Receives context from Orchestrator:
     - domain: Skill/domain for the question
     - difficulty: easy/medium/hard
-    - resume_context: Relevant resume chunks
+    - resume_context: Relevant resume chunks (optional context)
     - job_role: Target job role
     """
     question_context = state.get("question_context")
@@ -26,131 +28,86 @@ async def question_agent(state: InterviewState) -> Dict:
     
     domain = question_context.get("domain", "general")
     difficulty = question_context.get("difficulty", "medium")
-    resume_context = question_context.get("resume_context", "")
-    job_role = question_context.get("job_role", "")
+    job_role = state.get("job_role", "Software Engineer")
     
-    # Build prompt in Alpaca format (matching fine-tuning format)
-    instruction = "You are an expert interview question generator. Generate an interview question based on the parameters provided in the input."
+    # Create Alpaca-style instruction prompt
+    instruction = f"Generate a technical interview question for a {job_role} position about {domain} at {difficulty} difficulty level."
     
-    # Include resume context in input if available
-    if resume_context:
-        input_params = f"Domain: {domain}\nDifficulty: {difficulty}\nJob Role: {job_role}\nCandidate Background: {resume_context[:500]}"
-    else:
-        input_params = f"Domain: {domain}\nDifficulty: {difficulty}\nJob Role: {job_role}"
-    
-    alpaca_prompt = f"""Below is an instruction that describes a task, paired with an input that provides further context. Write a response that appropriately completes the request.
+    input_text = f"""Domain: {domain}
+Difficulty: {difficulty}
+Job Role: {job_role}
+
+Output only the interview question. Do not include explanations, answers, or formatting."""
+
+    try:
+        # Format as Alpaca prompt
+        alpaca_prompt = f"""Below is an instruction that describes a task, paired with an input that provides further context. Write a response that appropriately completes the request.
 
 ### Instruction:
-
 {instruction}
 
 ### Input:
+{input_text}
 
-{input_params}
+### Response:"""
 
-### Response:
-
-"""
-    
-    prompt = alpaca_prompt
-    
-    # Check if HuggingFace API is configured
-    if not settings.HUGGINGFACE_API_URL or not settings.HUGGINGFACE_API_KEY:
-        error_msg = "HuggingFace API not configured. Please set HUGGINGFACE_API_URL and HUGGINGFACE_API_KEY in config.py"
-        print(f"Question generation failed: {error_msg}")
-        return {
-            "question_agent_response": {
-                "error": error_msg,
-                "question": None
-            }
-        }
-    
-    try:
-        # Call Hugging Face API
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            response = await client.post(
-                settings.HUGGINGFACE_API_URL,
-                headers={
-                    "Authorization": f"Bearer {settings.HUGGINGFACE_API_KEY}",
-                    "Content-Type": "application/json"
-                },
-                json={
-                    "inputs": prompt,
-                    "parameters": {
-                        "max_new_tokens": 150,
-                        "temperature": 0.7,
-                        "return_full_text": False
-                    }
-                }
-            )
-            response.raise_for_status()
-            result = response.json()
-            
-            # Handle different response formats from Hugging Face
-            if isinstance(result, list):
-                generated_text = result[0].get("generated_text", "")
-            elif isinstance(result, dict):
-                generated_text = result.get("generated_text", "")
-            else:
-                generated_text = str(result)
-            
-            # Clean up the generated text
-            # Remove the prompt if it was included in the response
-            question = generated_text.strip()
-            
-            # Remove prompt prefix if present (some models return full text)
-            if "### Response:" in question:
-                question = question.split("### Response:")[-1].strip()
-            
-            # Remove common special tokens from fine-tuned models
-            special_tokens = [
-                "<|end_of_text|>",
-                "<|endoftext|>",
-                "</s>",
-                "<eos>",
-                "[END]",
-                "<|im_end|>",
-                "###",
-            ]
-            for token in special_tokens:
-                question = question.replace(token, "")
-            
-            # Remove any leading/trailing whitespace and newlines
-            question = question.strip()
-            
-            # Final safety check
-            if not question or not question.strip():
-                question = "Could you describe a challenging technical problem you solved recently?"
-                print("Question Agent: Generated empty question, using fallback.")
-            
+        messages = [
+            {"role": "user", "content": alpaca_prompt}
+        ]
+        
+        # Use the fine-tuned question generation service
+        question = await question_gen_service.generate_question(
+            messages=messages,
+            max_new_tokens=150,
+            temperature=0.7
+        )
+        
+        # Handle None or empty response
+        if question is None or not question.strip():
+            logger.error(f"Question gen returned None or empty for domain={domain}, difficulty={difficulty}")
             return {
                 "question_agent_response": {
-                    "question": question,
+                    "question": None,
                     "domain": domain,
                     "difficulty": difficulty,
-                    "error": None
-                },
-                "current_question_key_points": []  # Empty list, evaluator will handle implicit rubric
+                    "error": "Question generation returned empty response"
+                }
             }
+        
+        # Clean up the response
+        question = question.strip()
+        # Remove quotes if the model added them
+        question = question.strip('"\'')
+        
+        # Final validation - ensure we have a substantive question
+        if len(question) < 10:
+            logger.error(f"Question too short after cleaning: '{question}'")
+            return {
+                "question_agent_response": {
+                    "question": None,
+                    "domain": domain,
+                    "difficulty": difficulty,
+                    "error": f"Generated question too short: '{question}'"
+                }
+            }
+        
+        logger.info(f"Generated question for {domain} ({difficulty}): {question}")
+            
+        return {
+            "question_agent_response": {
+                "question": question,
+                "domain": domain,
+                "difficulty": difficulty,
+                "error": None
+            }
+        }
     
-    except httpx.HTTPError as e:
-        # No fallback - return error if YOUR model fails
-        error_msg = f"Hugging Face model error: {str(e)}"
-        print(f"Question generation failed: {error_msg}")
-        return {
-            "question_agent_response": {
-                "error": error_msg,
-                "question": None
-            }
-        }
     except Exception as e:
-        # No fallback - return error if YOUR model fails
         error_msg = f"Question generation error: {str(e)}"
-        print(f"Question generation failed: {error_msg}")
+        logger.error(error_msg)
         return {
             "question_agent_response": {
                 "error": error_msg,
                 "question": None
             }
         }
-
