@@ -21,7 +21,7 @@ class Settings(BaseModel):
     # ============================================
     # Set your Pinecone API key here (or via env variable)
 
-    PINECONE_API_KEY: str = "pcsk_4bYQVD_CnMZXDcLUXPxycHYqiLdd1H75HcTKpXast41tp2GHyGnUkeJykT15372BhHvKVo"  # TODO: Set your Pinecone API key here 
+    PINECONE_API_KEY: str = ""  # TODO: Set your Pinecone API key here 
     PINECONE_ENVIRONMENT: str = "us-east-1"  # or "us-west1" depending on your index
     PINECONE_INDEX_NAME: str = "resumes"
     PINECONE_DIMENSION: int = 1024  # Dimension for Qwen3-Embedding-0.6B (will be auto-detected)
