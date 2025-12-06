@@ -44,26 +44,7 @@ class EvaluationService:
         job_role: str = "Data Scientist"
     ) -> Dict:
         """
-        Evaluate a candidate's answer using two-step approach:
-        1. Generate reference answer
-        2. Judge candidate against reference
-        
-        Args:
-            domain: Technical domain (e.g., "SQL", "Python", "Machine Learning")
-            question: The interview question
-            user_answer: The candidate's answer
-            job_role: Target job role for context
-        
-        Returns:
-            {
-                "technical_accuracy": float,
-                "completeness": float,
-                "clarity": float,
-                "overall_score": float,
-                "feedback": str,
-                "analysis": str,
-                "reference_answer": str
-            }
+        Evaluate a candidate's answer using two-step approach.
         """
         print(f"Evaluating answer for domain: {domain}")
         
@@ -106,7 +87,8 @@ Answer:"""
                 prompt=reference_prompt,
                 max_new_tokens=256,
                 temperature=0.2,
-                stop_sequences=["<|end_of_text|>"]
+                stop=["<|end_of_text|>", "Question:", "User:"], # Updated deprecated arg
+                return_full_text=False  # CRITICAL FIX: Don't echo prompt
             )
             
             if response:
@@ -173,7 +155,8 @@ Answer:"""
                 prompt=judge_prompt,
                 max_new_tokens=512,
                 temperature=0.1,
-                stop_sequences=["<|end_of_text|>"]
+                stop=["<|end_of_text|>"], # Updated deprecated arg
+                return_full_text=False    # CRITICAL FIX: Don't echo prompt
             )
             
             if not response:
@@ -211,8 +194,8 @@ Answer:"""
             except json.JSONDecodeError:
                 pass
             
-            # Try to find JSON object in response
-            json_match = re.search(r'\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}', clean_text, re.DOTALL)
+            # Try to find JSON object in response (greedy search)
+            json_match = re.search(r'\{.*\}', clean_text, re.DOTALL)
             if json_match:
                 try:
                     return json.loads(json_match.group())
@@ -256,4 +239,3 @@ Answer:"""
 
 # Singleton instance
 evaluation_service = EvaluationService()
-

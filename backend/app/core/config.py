@@ -1,86 +1,92 @@
 """
 Application Configuration
 
-All settings are defined here directly in this file.
-Modify the values below to configure your application.
-No .env file or environment variables needed.
+All settings are loaded from environment variables (.env file).
+This keeps sensitive data out of version control.
 """
 
-from pydantic import BaseModel, field_validator
+from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic import field_validator
 from typing import List, Union, Optional
 
 
-class Settings(BaseModel):
+class Settings(BaseSettings):
+    """
+    Application settings loaded from environment variables.
+    Create a .env file in the backend directory with all required values.
+    """
+    
     # ============================================
     # DATABASE CONFIGURATION
     # ============================================
-    DATABASE_URL: str = "sqlite:///./interview.db"
+    DATABASE_URL: str
     
     # ============================================
     # PINECONE VECTOR DB CONFIGURATION
     # ============================================
-    # Set your Pinecone API key here (or via env variable)
-
-    PINECONE_API_KEY: str = ""  # TODO: Set your Pinecone API key here 
-    PINECONE_ENVIRONMENT: str = "us-east-1"  # or "us-west1" depending on your index
-    PINECONE_INDEX_NAME: str = "resumes"
-    PINECONE_DIMENSION: int = 1024  # Dimension for Qwen3-Embedding-0.6B (will be auto-detected)
+    PINECONE_API_KEY: str
+    PINECONE_ENVIRONMENT: str
+    PINECONE_INDEX_NAME: str
+    PINECONE_DIMENSION: int
     
     # ============================================
     # EMBEDDING MODEL CONFIGURATION
     # ============================================
-    EMBEDDING_MODEL: str = "Qwen/Qwen3-Embedding-0.6B"  # Only used if HF API not configured
-    EMBEDDING_DIMENSION: int = 1024  # Dimension for embeddings (will be auto-detected)
+    EMBEDDING_MODEL: str
+    EMBEDDING_DIMENSION: int
     
     # ============================================
     # HUGGING FACE API CONFIGURATION
     # ============================================
-    # Question generation model (fine-tuned for interview questions)
-    HUGGINGFACE_API_URL: str = ""  # TODO: Set your HF endpoint for question generation
-    HUGGINGFACE_API_KEY: str = ""  # TODO: Set your HF API key
+    HUGGINGFACE_API_URL: str
+    HUGGINGFACE_API_KEY: str
     
-    # LLM API (for evaluation, cleaning, orchestrator, etc.)
-    HUGGINGFACE_LLM_API_URL: str = ""  # TODO: Set your HF endpoint for LLM
-    HUGGINGFACE_LLM_API_KEY: str = ""  # TODO: Set your HF API key
+    HUGGINGFACE_LLM_API_URL: str
+    HUGGINGFACE_LLM_API_KEY: str
     
-    # Embedding API
-    HUGGINGFACE_EMBEDDING_API_URL: str = ""  # TODO: Set your HF endpoint for embeddings
-    HUGGINGFACE_EMBEDDING_API_KEY: str = ""  # TODO: Set your HF API key
+    HUGGINGFACE_EMBEDDING_API_URL: str
+    HUGGINGFACE_EMBEDDING_API_KEY: str
     
-    # Evaluation Model API (dedicated model for answer evaluation)
-    HUGGINGFACE_EVALUATION_API_URL: str = ""  # TODO: Set your HF endpoint for evaluation
-    HUGGINGFACE_EVALUATION_API_KEY: str = ""  # TODO: Set your HF API key
+    HUGGINGFACE_EVALUATION_API_URL: str
+    HUGGINGFACE_EVALUATION_API_KEY: str
     
     # ============================================
-    # LOCAL LLM MODEL CONFIGURATION (Deprecated - using HF API instead)
+    # LOCAL LLM MODEL CONFIGURATION
     # ============================================
-    LOCAL_LLM_MODEL: str = "Qwen/Qwen3-0.6B"  # Only used if HF API not configured
+    LOCAL_LLM_MODEL: str
     
     # ============================================
-    # OPENAI API (DEPRECATED - No longer used)
+    # OPENAI API CONFIGURATION
     # ============================================
-    # Kept for backward compatibility only
-    OPENAI_API_KEY: Optional[str] = None
-    OPENAI_MODEL: str = "gpt-4"
+    OPENAI_API_KEY: str
+    OPENAI_MODEL: str
     
     # ============================================
     # FILE STORAGE CONFIGURATION
     # ============================================
-    UPLOAD_DIR: str = "./uploads"
-    MAX_FILE_SIZE: int = 10485760  # 10MB
+    UPLOAD_DIR: str
+    MAX_FILE_SIZE: int
     
     # ============================================
     # APPLICATION CONFIGURATION
     # ============================================
-    DEBUG: bool = True
-    SECRET_KEY: str = "change-this-secret-key-in-production"  # TODO: Change this in production!
-    CORS_ORIGINS: Union[str, List[str]] = "http://localhost:3000,http://localhost:3001"
+    DEBUG: bool
+    SECRET_KEY: str
+    CORS_ORIGINS: Union[str, List[str]]
     
     # ============================================
     # JWT AUTHENTICATION CONFIGURATION
     # ============================================
-    JWT_ALGORITHM: str = "HS256"
-    JWT_EXPIRATION_HOURS: int = 24
+    JWT_ALGORITHM: str
+    JWT_EXPIRATION_HOURS: int
+    
+    # Pydantic settings configuration
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        env_file_encoding="utf-8",
+        case_sensitive=True,
+        extra="ignore"
+    )
     
     @field_validator("CORS_ORIGINS", mode="before")
     @classmethod
@@ -89,7 +95,7 @@ class Settings(BaseModel):
         if isinstance(v, str):
             return [origin.strip() for origin in v.split(",") if origin.strip()]
         return v
-    
 
-# Create settings instance - all configuration is in this file
+
+# Create settings instance - loads from .env file automatically
 settings = Settings()
