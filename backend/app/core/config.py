@@ -47,6 +47,10 @@ class Settings(BaseModel):
     HUGGINGFACE_EMBEDDING_API_URL: str = ""  # TODO: Set your HF endpoint for embeddings
     HUGGINGFACE_EMBEDDING_API_KEY: str = ""  # TODO: Set your HF API key
     
+    # Evaluation Model API (dedicated model for answer evaluation)
+    HUGGINGFACE_EVALUATION_API_URL: str = ""  # TODO: Set your HF endpoint for evaluation
+    HUGGINGFACE_EVALUATION_API_KEY: str = ""  # TODO: Set your HF API key
+    
     # ============================================
     # LOCAL LLM MODEL CONFIGURATION (Deprecated - using HF API instead)
     # ============================================

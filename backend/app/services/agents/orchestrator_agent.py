@@ -1,324 +1,205 @@
 """
-Conversational Orchestrator Agent
+Orchestrator Agent
 
-Acts like a real hiring manager - friendly, conversational, and strategic.
-Guides the interview through different phases naturally.
+Purpose: Coordinates the interview flow by:
+1. Getting interview plan from LLM (domains to cover)
+2. Selecting domains in round-robin fashion
+3. Using even difficulty distribution
+4. All decisions are LLM-driven, no hardcoded sentences
 """
 
-from typing import Dict
+from typing import Dict, List
 from app.utils.langgraph_state import InterviewState
 from app.services.local_llm_service import local_llm_service
 
 
+# Configuration
+DEFAULT_TOTAL_QUESTIONS = 10  # Total questions to ask (excluding intro)
+DIFFICULTY_DISTRIBUTION = {
+    10: ["easy", "easy", "easy", "medium", "medium", "medium", "hard", "hard", "hard", "hard"],
+    7: ["easy", "easy", "medium", "medium", "medium", "hard", "hard"],
+    5: ["easy", "medium", "medium", "hard", "hard"],
+}
+
+
 async def orchestrator_agent(state: InterviewState) -> Dict:
     """
-    Orchestrator Agent - Acts like a human hiring manager
+    Orchestrator Agent - Coordinates the interview flow
     
     Flow:
-    1. Greeting phase - Warm welcome
-    2. Intro phase - Ask "Tell me about yourself"
-    3. Resume discussion - Go through resume points, appreciate and ask questions
-    4. Technical deep dive - Ask domain-specific questions
-    5. Closing - Thank the candidate
-    
-    The orchestrator decides what to ask and coordinates with other agents.
+    1. Greeting phase → Intro question
+    2. Intro phase → Generate interview plan from LLM
+    3. Technical questions → Round-robin domains with even difficulty
+    4. Closing → End interview
     """
     
     conversation_phase = state.get("conversation_phase", "greeting")
-    current_resume_point_index = state.get("current_resume_point_index", 0)
-    resume_summary = state.get("resume_summary")
     question_count = state.get("question_count", 0)
     current_round = state.get("current_round", "welcome")
     job_role = state.get("job_role", "")
+    resume_summary = state.get("resume_summary")
+    planned_domains = state.get("planned_domains")
+    difficulty_sequence = state.get("difficulty_sequence")
+    total_questions = state.get("total_questions", DEFAULT_TOTAL_QUESTIONS)
     
     # DEBUG: Log current state
     print(f"ORCHESTRATOR DEBUG:")
     print(f"  conversation_phase: {conversation_phase}")
     print(f"  question_count: {question_count}")
     print(f"  current_round: {current_round}")
+    print(f"  planned_domains: {planned_domains}")
     print(f"  resume_summary exists: {resume_summary is not None}")
     
     # Check if we just generated a question and it's waiting to be sent
     question_agent_response = state.get("question_agent_response")
     if question_agent_response:
         if question_agent_response.get("question") and not question_agent_response.get("error"):
-            # Question generated - now it needs to be cleaned
-            # Check if we're waiting for cleaning
             pending_question = state.get("pending_question")
             if pending_question:
-                # Question is already cleaned, ready to send
                 return {
                     "next_action": "wait",
                     "status": "active"
                 }
             else:
-                # Mark question as pending for cleaning
                 return {
                     "pending_question": question_agent_response.get("question"),
                     "next_action": "wait",
                     "status": "active"
                 }
         elif question_agent_response.get("error"):
-            # Question generation failed
             return {
                 "next_action": "complete",
                 "status": "error"
             }
     
+    # =========================================
     # GREETING PHASE
+    # =========================================
     if conversation_phase == "greeting":
-        # This is handled in interview_service.generate_welcome_message
-        # Move to intro phase after greeting
         return {
             "conversation_phase": "intro_question",
             "current_round": "intro",
             "next_action": "generate_question"
         }
     
+    # =========================================
     # INTRO PHASE - Ask "Tell me about yourself"
+    # =========================================
     if conversation_phase == "intro_question":
-        # Check if we've already asked the intro question (question_count > 0 means we've asked something)
-        print(f"INTRO PHASE CHECK: question_count = {question_count}")
         if question_count > 0:
-            # User has answered, DON'T just transition - actually process resume discussion!
-            print(f"Moving to resume_point phase - will process in this call")
-            conversation_phase = "resume_point"
-            current_round = "resume_discussion"
-            # Continue execution to the resume_point block below (don't return yet!)
+            # User answered intro question, now plan the interview
+            print(f"Intro answered. Planning interview based on resume summary...")
+            
+            # Generate interview plan if not already done
+            if not planned_domains:
+                plan_result = await _generate_interview_plan(resume_summary, job_role, total_questions)
+                planned_domains = plan_result.get("domains", [])
+                difficulty_sequence = plan_result.get("difficulty_sequence", [])
+                
+                print(f"Interview plan generated:")
+                print(f"  Domains: {planned_domains}")
+                print(f"  Difficulty sequence: {difficulty_sequence}")
+            
+            # Set up the first technical question
+            # technical_question_index = 0 (first technical question after intro)
+            first_domain = planned_domains[0] if planned_domains else "Python"
+            first_difficulty = difficulty_sequence[0] if difficulty_sequence else "easy"
+            
+            print(f"Technical Q#1: Domain={first_domain}, Difficulty={first_difficulty}")
+            
+            # Generate orchestrator intent for first question
+            orchestrator_intent = await _generate_orchestrator_intent(first_domain, job_role, first_difficulty)
+            
+            # Transition to technical questions WITH question_context set
+            return {
+                "conversation_phase": "technical_question",
+                "current_round": "technical_deep_dive",
+                "planned_domains": planned_domains,
+                "difficulty_sequence": difficulty_sequence,
+                "selected_domain": first_domain,
+                "difficulty": first_difficulty,
+                "orchestrator_intent": orchestrator_intent,
+                "question_context": {
+                    "domain": first_domain,
+                    "difficulty": first_difficulty,
+                    "round": "technical_deep_dive"
+                },
+                "next_action": "generate_question",
+                "status": "active"
+            }
         else:
-            # question_count == 0, generate intro question
-            print(f"GENERATING intro question (question_count = 0)")
+            # Generate intro question using LLM
+            print(f"Generating intro question for {job_role}")
+            intro_question = await _generate_intro_question(job_role)
             
-            # Generate a warm intro question using local LLM
-            prompt = f"""Generate ONE interview question for a {job_role} position asking the candidate to introduce themselves.
-
-Requirements:
-- Be warm and conversational
-- Ask about their journey and what excites them about the role
-- Return ONLY the question text
-- No explanations, no additional text
-
-Question:"""
-
-            try:
-                messages = [
-                        {"role": "system", "content": "You are a professional interview question generator. Return only the question, nothing else."},
-                        {"role": "user", "content": prompt}
-                ]
-                
-                intro_question = await local_llm_service.generate_async(messages, max_new_tokens=100, temperature=0.7)
-                
-                # Clean up any extra text (take only the first sentence or up to first newline)
-                intro_question = intro_question.split('\n')[0].strip()
-                # Remove quotes if present
-                intro_question = intro_question.strip('"\'')
-                
-                # Fallback if empty
-                if not intro_question or len(intro_question) < 10:
-                    intro_question = "To get started, could you tell me a bit about yourself and what excites you about this role?"
-                
-                return {
-                    "question_agent_response": {
-                        "question": intro_question,
-                        "domain": "Introduction",
-                        "difficulty": "easy",
-                        "error": None
-                    },
-                    "next_action": "wait",
-                    "status": "active"
-                }
-            except Exception as e:
-                print(f"Intro question generation failed: {str(e)}")
-                # Fallback intro question
-                return {
-                    "question_agent_response": {
-                        "question": "Thank you for joining! To get started, could you tell me a bit about yourself and what excites you about this role?",
-                        "domain": "Introduction",
-                        "difficulty": "easy",
-                        "error": None
-                    },
-                    "next_action": "wait",
-                    "status": "active"
-                }
-    
-    # RESUME DISCUSSION PHASE
-    if conversation_phase == "resume_point":
-        print(f"RESUME DISCUSSION PHASE")
-        
-        # Check if we have resume summary and summary points
-        summary_points = resume_summary.get("summary_points", []) if resume_summary else []
-        
-        if not resume_summary or not summary_points or len(summary_points) == 0:
-            print(f"No resume summary or no summary points ({len(summary_points)}), skipping to technical")
-            # Skip to technical if no resume summary
             return {
-                "conversation_phase": "technical_question",
-                "current_round": "technical_deep_dive",
-                "next_action": "generate_question"
-            }
-        
-        print(f"Resume has {len(summary_points)} summary points")
-        print(f"Current index: {current_resume_point_index}")
-        
-        # Check if we've covered all resume points
-        if current_resume_point_index >= len(summary_points):
-            print(f"All resume points covered, moving to technical")
-            # Move to technical deep dive
-            return {
-                "conversation_phase": "technical_question",
-                "current_round": "technical_deep_dive",
-                "current_resume_point_index": 0,  # Reset
-                "next_action": "generate_question"
-            }
-        
-        print(f"Processing resume point #{current_resume_point_index}")
-        
-        # Get current resume point
-        try:
-            current_point = summary_points[current_resume_point_index]
-            point_text = current_point.get("point", "")
-            domains = current_point.get("domains", ["General"])
-            significance = current_point.get("significance", "medium")
-            talking_angle = current_point.get("talking_angle", "")
-            
-            print(f"Point: {point_text[:100]}")
-            print(f"Domains: {domains}")
-        except Exception as e:
-            print(f"ERROR getting resume point: {str(e)}")
-            # Fallback to technical
-            return {
-                "conversation_phase": "technical_question",
-                "current_round": "technical_deep_dive",
-                "next_action": "generate_question"
-            }
-        
-        # Orchestrator decides what to ask about this point
-        # Simplified approach - skip LLM parsing, create directly
-        try:
-            # Create a simple comment and intent
-            comment = f"I see you have experience with {point_text[:100]}."
-            intent = f"Tell me more about your work with {domains[0] if domains else 'this area'}."
-            domain = domains[0] if domains else "General"
-            
-            # Determine difficulty based on significance
-            difficulty_map = {"high": "hard", "medium": "medium", "low": "easy"}
-            difficulty = difficulty_map.get(significance, "medium")
-            
-            # Ensure domain is valid (not a placeholder)
-            if not domain or domain in ["[insert here]", "General"]:
-                domain = domains[0] if domains else "Data Analysis"
-            
-            print(f"Orchestrator Decision:")
-            print(f"   Comment: {comment}")
-            print(f"   Intent: {intent}")
-            print(f"   Domain: {domain}")
-            print(f"   Difficulty: {difficulty}")
-            print(f"   Moving to next resume point: {current_resume_point_index} -> {current_resume_point_index + 1}")
-            
-            # Store orchestrator's intent and comment for later use
-            # Note: question_context only has domain + difficulty (for question agent)
-            # resume_context is stored separately for cleaning agent
-            return {
-                "orchestrator_intent": f"{comment} {intent}",
-                "selected_domain": domain,
-                "difficulty": difficulty,
-                "question_context": {
-                    "domain": domain,
-                    "difficulty": difficulty,
-                    "round": "resume_discussion",
-                    "resume_context": point_text  # Stored here for cleaning agent only
+                "question_agent_response": {
+                    "question": intro_question,
+                    "domain": "Introduction",
+                    "difficulty": "easy",
+                    "error": None
                 },
-                "current_resume_point_index": current_resume_point_index + 1,  # Move to next point AFTER this question
-                "next_action": "generate_question",
-                "status": "active"
-            }
-            
-        except Exception as e:
-            print(f"Orchestrator planning failed: {str(e)}")
-            # Fallback: Generate a simple question
-            domain_fallback = domains[0] if domains else "Data Analysis"
-            return {
-                "orchestrator_intent": f"Tell me more about: {point_text[:100]}",
-                "selected_domain": domain_fallback,
-                "difficulty": "medium",
-                "question_context": {
-                    "domain": domain_fallback,
-                    "difficulty": "medium",
-                    "round": "resume_discussion",
-                    "resume_context": point_text  # For cleaning agent only
-                },
-                "current_resume_point_index": current_resume_point_index + 1,
-                "next_action": "generate_question",
+                "next_action": "wait",
                 "status": "active"
             }
     
-    # TECHNICAL DEEP DIVE PHASE
+    # =========================================
+    # TECHNICAL QUESTIONS PHASE
+    # =========================================
     if conversation_phase == "technical_question":
-        # Ask a few more technical questions (5-7 questions total)
-        MAX_TOTAL_QUESTIONS = 7
+        # Check if we've asked enough questions
+        # question_count includes intro question, so technical questions = question_count - 1
+        technical_question_index = question_count - 1  # Subtract intro question
         
-        if question_count >= MAX_TOTAL_QUESTIONS:
-            # End interview
+        if technical_question_index >= total_questions:
+            print(f"All {total_questions} technical questions asked. Ending interview.")
             return {
                 "conversation_phase": "closing",
                 "status": "completed",
                 "next_action": "complete"
             }
         
-        # Select technical domains from resume summary if available
-        technical_domains = []
-        if resume_summary:
-            # Extract domains from summary points
-            summary_points = resume_summary.get("summary_points", [])
-            for point in summary_points:
-                point_domains = point.get("domains", [])
-                technical_domains.extend(point_domains)
-            
-            # Also add key strengths if they look like domains
-            key_strengths = resume_summary.get("key_strengths", [])
-            technical_domains.extend(key_strengths)
-            
-            # Deduplicate
-            technical_domains = list(set(technical_domains))
+        # Ensure we have planned domains
+        if not planned_domains:
+            print(f"No planned domains, generating plan...")
+            plan_result = await _generate_interview_plan(resume_summary, job_role, total_questions)
+            planned_domains = plan_result.get("domains", [])
+            difficulty_sequence = plan_result.get("difficulty_sequence", [])
         
-        # Fallback to common domains if none found
-        if not technical_domains:
-            technical_domains = ["Python", "System Design", "Machine Learning", "SQL", "Data Analysis"]
+        # Select domain using round-robin
+        domain_index = technical_question_index % len(planned_domains)
+        selected_domain = planned_domains[domain_index]
         
-        print(f"Technical domains from resume: {technical_domains}")
+        # Get difficulty from pre-planned sequence
+        if difficulty_sequence and technical_question_index < len(difficulty_sequence):
+            difficulty = difficulty_sequence[technical_question_index]
+        else:
+            # Fallback to even distribution
+            difficulty = _get_difficulty_for_index(technical_question_index, total_questions)
         
-        # Cycle through domains
-        selected_domain = technical_domains[question_count % len(technical_domains)]
+        print(f"Technical Q#{technical_question_index + 1}: Domain={selected_domain}, Difficulty={difficulty}")
         
-        # Adjust difficulty based on performance
-        evaluation_history = state.get("evaluation_history", [])
-        difficulty = state.get("difficulty", "medium")
-        
-        if len(evaluation_history) >= 2:
-            recent_scores = [eval.get("score", 0.5) for eval in evaluation_history[-3:]]
-            avg_score = sum(recent_scores) / len(recent_scores)
-            
-            if avg_score > 0.8 and difficulty != "hard":
-                difficulty = "hard"
-            elif avg_score < 0.5 and difficulty != "easy":
-                difficulty = "easy"
-        
-        print(f"Selected domain for Q{question_count}: {selected_domain}, difficulty: {difficulty}")
+        # Generate orchestrator intent using LLM (no hardcoded sentences)
+        orchestrator_intent = await _generate_orchestrator_intent(selected_domain, job_role, difficulty)
         
         return {
             "selected_domain": selected_domain,
             "difficulty": difficulty,
-            "orchestrator_intent": f"Assess {selected_domain} skills",
+            "orchestrator_intent": orchestrator_intent,
             "question_context": {
-        "domain": selected_domain,
-        "difficulty": difficulty,
+                "domain": selected_domain,
+                "difficulty": difficulty,
                 "round": "technical_deep_dive"
             },
+            "planned_domains": planned_domains,
+            "difficulty_sequence": difficulty_sequence,
             "next_action": "generate_question",
             "status": "active"
         }
     
+    # =========================================
     # CLOSING PHASE
+    # =========================================
     if conversation_phase == "closing":
         return {
             "status": "completed",
@@ -326,11 +207,201 @@ Question:"""
         }
     
     # Default fallback
-    print(f"FALLBACK: No phase matched! Phase={conversation_phase}, Round={current_round}")
+    print(f"FALLBACK: No phase matched! Phase={conversation_phase}")
     return {
         "next_action": "wait",
         "status": "active"
     }
+
+
+async def _generate_interview_plan(resume_summary: dict, job_role: str, total_questions: int) -> Dict:
+    """
+    Generate interview plan using LLM based on resume summary
+    
+    Returns:
+        {
+            "domains": ["Domain1", "Domain2", ...],  # Ordered by priority
+            "difficulty_sequence": ["easy", "medium", "hard", ...]
+        }
+    """
+    
+    # Get recommended domains from resume summary
+    if resume_summary:
+        recommended_domains = resume_summary.get("recommended_domains", [])
+        candidate_overview = resume_summary.get("candidate_overview", "")
+        technical_skills = resume_summary.get("technical_skills", [])
+    else:
+        recommended_domains = []
+        candidate_overview = ""
+        technical_skills = []
+    
+    available_domains = [
+        "Python", "SQL", "Data Engineering", "Data Analysis",
+        "Machine Learning", "Deep Learning", "Artificial Intelligence",
+        "System Design", "Statistics"
+    ]
+    
+    prompt = f"""You are an expert technical interviewer planning an interview for a {job_role} position.
+
+CANDIDATE INFORMATION:
+- Overview: {candidate_overview}
+- Technical Skills: {', '.join(technical_skills) if technical_skills else 'Not specified'}
+- Recommended Domains from Resume: {', '.join(recommended_domains) if recommended_domains else 'Not specified'}
+
+AVAILABLE DOMAINS TO CHOOSE FROM:
+{', '.join(available_domains)}
+
+TASK:
+Plan the technical portion of the interview with {total_questions} questions.
+Select the most relevant domains based on the candidate's background and the {job_role} role requirements.
+
+OUTPUT FORMAT (valid JSON only):
+{{
+    "domains": ["Domain1", "Domain2", "Domain3", "Domain4", "Domain5"],
+    "reasoning": "Brief explanation of domain selection"
+}}
+
+INSTRUCTIONS:
+1. Select 4-6 domains that best match the candidate's experience AND the {job_role} requirements
+2. Order domains by priority - start with the candidate's strongest areas
+3. Include at least one domain that tests breadth (not just their comfort zone)
+4. Return ONLY valid JSON
+
+JSON Output:"""
+
+    try:
+        messages = [
+            {"role": "system", "content": "You are an expert technical interviewer. Output only valid JSON."},
+            {"role": "user", "content": prompt}
+        ]
+        
+        result = await local_llm_service.generate_json_async(messages, max_new_tokens=500, temperature=0.3)
+        
+        if result and result.get("domains"):
+            domains = result["domains"]
+            # Validate domains
+            validated_domains = [d for d in domains if d in available_domains]
+            if not validated_domains:
+                validated_domains = recommended_domains if recommended_domains else ["Python", "SQL", "Machine Learning"]
+        else:
+            # Use recommended domains from resume summary
+            validated_domains = recommended_domains if recommended_domains else ["Python", "SQL", "Machine Learning"]
+        
+        # Generate difficulty sequence with even distribution
+        difficulty_sequence = _generate_difficulty_sequence(total_questions)
+        
+        print(f"Interview plan created: {validated_domains}")
+        
+        return {
+            "domains": validated_domains[:6],  # Max 6 domains
+            "difficulty_sequence": difficulty_sequence
+        }
+        
+    except Exception as e:
+        print(f"Interview plan generation failed: {str(e)}")
+        # Fallback to recommended domains or defaults
+        fallback_domains = recommended_domains if recommended_domains else ["Python", "SQL", "Machine Learning", "Data Analysis"]
+        return {
+            "domains": fallback_domains[:6],
+            "difficulty_sequence": _generate_difficulty_sequence(total_questions)
+        }
+
+
+def _generate_difficulty_sequence(total_questions: int) -> List[str]:
+    """
+    Generate even difficulty distribution
+    
+    For 10 questions: 3 easy, 3 medium, 4 hard
+    For 7 questions: 2 easy, 2 medium, 3 hard
+    For 5 questions: 1 easy, 2 medium, 2 hard
+    """
+    if total_questions in DIFFICULTY_DISTRIBUTION:
+        return DIFFICULTY_DISTRIBUTION[total_questions].copy()
+    
+    # Calculate distribution for custom question count
+    easy_count = total_questions // 3
+    medium_count = total_questions // 3
+    hard_count = total_questions - easy_count - medium_count
+    
+    sequence = (["easy"] * easy_count) + (["medium"] * medium_count) + (["hard"] * hard_count)
+    return sequence
+
+
+def _get_difficulty_for_index(index: int, total_questions: int) -> str:
+    """Get difficulty based on question index"""
+    sequence = _generate_difficulty_sequence(total_questions)
+    if index < len(sequence):
+        return sequence[index]
+    return "medium"
+
+
+async def _generate_intro_question(job_role: str) -> str:
+    """Generate intro question using LLM"""
+    prompt = f"""Generate a warm, professional interview opening question for a {job_role} position.
+
+The question should:
+- Ask the candidate to introduce themselves
+- Be conversational and welcoming
+- Encourage them to share their background and interests
+
+Output ONLY the question text, nothing else."""
+
+    try:
+        messages = [
+            {"role": "system", "content": "You are a friendly professional interviewer. Output only the question."},
+            {"role": "user", "content": prompt}
+        ]
+        
+        intro_question = await local_llm_service.generate_async(messages, max_new_tokens=100, temperature=0.7)
+        
+        if intro_question:
+            intro_question = intro_question.strip().strip('"\'')
+            intro_question = intro_question.split('\n')[0].strip()
+            
+            if len(intro_question) > 10:
+                return intro_question
+        
+        # Fallback
+        return f"Welcome! I'm excited to learn more about you. Could you start by telling me about your background and what draws you to this {job_role} role?"
+        
+    except Exception as e:
+        print(f"Intro question generation failed: {str(e)}")
+        return f"Welcome! I'm excited to learn more about you. Could you start by telling me about your background and what draws you to this {job_role} role?"
+
+
+async def _generate_orchestrator_intent(domain: str, job_role: str, difficulty: str) -> str:
+    """Generate orchestrator intent using LLM (no hardcoded sentences)"""
+    prompt = f"""You are an interviewer for a {job_role} position.
+You want to assess the candidate's {domain} skills at {difficulty} difficulty level.
+
+Generate a brief, natural intent statement (1 sentence) that describes what you want to explore.
+This is internal context, not shown to the candidate.
+
+Examples:
+- "Explore their practical experience with Python data structures and when to use each"
+- "Assess their understanding of ML model evaluation techniques"
+- "Test their ability to design scalable data pipelines"
+
+Output ONLY the intent statement:"""
+
+    try:
+        messages = [
+            {"role": "system", "content": "Output only a brief intent statement."},
+            {"role": "user", "content": prompt}
+        ]
+        
+        intent = await local_llm_service.generate_async(messages, max_new_tokens=50, temperature=0.5)
+        
+        if intent:
+            intent = intent.strip().strip('"\'')
+            if len(intent) > 10:
+                return intent
+        
+        return f"Assess {domain} skills at {difficulty} level"
+        
+    except Exception as e:
+        print(f"Intent generation failed: {str(e)}")
+        return f"Assess {domain} skills at {difficulty} level"
 
 
 def should_continue(state: InterviewState) -> str:
@@ -338,19 +409,15 @@ def should_continue(state: InterviewState) -> str:
     next_action = state.get("next_action", "wait")
     status = state.get("status", "active")
     
-    # Check if interview is complete
     if status == "completed" or status == "error" or next_action == "complete":
         return "complete"
     
-    # Check if we need to wait for user response
     if next_action == "wait":
         return "complete"
     
-    # Check if we need to generate a question
     if next_action == "generate_question":
         return "generate_question"
     
-    # Check if we need to evaluate
     if next_action == "evaluate":
         return "evaluate"
     

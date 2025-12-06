@@ -1,17 +1,28 @@
+"""
+Evaluation Agent
+
+Uses the dedicated evaluation service with two-step approach:
+1. Generate reference (expert) answer
+2. Judge candidate's answer against reference
+
+Returns structured scores: technical_accuracy, completeness, clarity, overall_score
+"""
+
 from typing import Dict
 from app.utils.langgraph_state import InterviewState
-from app.services.local_llm_service import local_llm_service
+from app.services.evaluation_service import evaluation_service
 
 
 async def evaluation_agent(state: InterviewState) -> Dict:
     """
-    Evaluation Agent - Uses local Qwen model to evaluate user answers
+    Evaluation Agent - Uses dedicated evaluation model for answer assessment
     
     Receives context from Orchestrator:
     - question: The question that was asked
     - answer: User's answer
     - domain: Domain/skill of the question
     - round: technical or behavioral
+    - difficulty: easy/medium/hard
     """
     
     evaluation_context = state.get("evaluation_context")
@@ -26,69 +37,50 @@ async def evaluation_agent(state: InterviewState) -> Dict:
     
     question = evaluation_context.get("question", "")
     answer = evaluation_context.get("answer", "")
-    domain = evaluation_context.get("domain", "")
-    round_type = evaluation_context.get("round", "technical")
-    difficulty = evaluation_context.get("difficulty", "medium")
+    domain = evaluation_context.get("domain", "General")
+    job_role = state.get("job_role", "Data Scientist")
     
-    # Build evaluation prompt
-    evaluation_prompt = f"""You are an expert interview evaluator. Evaluate the candidate's answer to an interview question.
-
-Job Role: {state.get('job_role', 'Unknown')}
-Round: {round_type.capitalize()}
-Domain/Skill: {domain}
-Difficulty: {difficulty}
-
-Question:
-{question}
-
-Candidate's Answer:
-{answer}
-
-Please provide:
-1. A score from 0.0 to 1.0 (where 1.0 is excellent)
-2. Detailed feedback on the answer
-3. Strengths of the answer
-4. Areas for improvement
-
-Format your response as JSON with the following structure:
-{{
-    "score": <float between 0.0 and 1.0>,
-    "feedback_text": "<detailed feedback>",
-    "strengths": ["<strength1>", "<strength2>"],
-    "improvements": ["<improvement1>", "<improvement2>"]
-}}"""
+    # Validate inputs
+    if not question or not answer:
+        return {
+            "evaluation_agent_response": {
+                "error": "Missing question or answer",
+                "feedback": None,
+                "score": None
+            }
+        }
     
     try:
-        messages = [
-            {"role": "system", "content": "You are an expert interview evaluator. Always respond with valid JSON in the exact format specified."},
-            {"role": "user", "content": evaluation_prompt}
-        ]
+        # Use the dedicated evaluation service with two-step approach
+        result = await evaluation_service.evaluate_answer(
+            domain=domain,
+            question=question,
+            user_answer=answer,
+            job_role=job_role
+        )
         
-        evaluation_result = await local_llm_service.generate_json_async(messages, max_new_tokens=800, temperature=0.3)
-        
-        if not evaluation_result:
-            # Fallback if JSON parsing fails
-            response_text = await local_llm_service.generate_async(messages, max_new_tokens=800, temperature=0.3)
-            evaluation_result = {
-                "score": 0.7,
-                "feedback_text": response_text,
-                "strengths": [],
-                "improvements": []
-            }
+        # Extract scores and feedback
+        overall_score = result.get("overall_score", 0.5)
         
         return {
             "evaluation_agent_response": {
-                "score": float(evaluation_result.get("score", 0.7)),
+                "score": float(overall_score),
                 "feedback": {
-                    "feedback_text": evaluation_result.get("feedback_text", ""),
-                    "strengths": evaluation_result.get("strengths", []),
-                    "improvements": evaluation_result.get("improvements", [])
+                    "feedback_text": result.get("feedback", ""),
+                    "analysis": result.get("analysis", ""),
+                    "technical_accuracy": result.get("technical_accuracy", overall_score),
+                    "completeness": result.get("completeness", overall_score),
+                    "clarity": result.get("clarity", overall_score),
+                    "strengths": [],  # Can be extracted from analysis if needed
+                    "improvements": [result.get("feedback", "")]
                 },
+                "reference_answer": result.get("reference_answer", ""),
                 "error": None
             }
         }
     
     except Exception as e:
+        print(f"Evaluation agent error: {e}")
         return {
             "evaluation_agent_response": {
                 "error": f"Error evaluating answer: {str(e)}",

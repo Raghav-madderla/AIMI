@@ -76,7 +76,12 @@ class LocalLLMService:
                 temperature=temperature
             )
             
-            return response.choices[0].message.content
+            # Safely extract content, return empty string if None
+            content = response.choices[0].message.content
+            if content is None:
+                print("Warning: API returned None content")
+                return ""
+            return content
             
         except Exception as e:
             print(f"API generation failed: {e}")
@@ -85,6 +90,12 @@ class LocalLLMService:
 
     def _clean_special_tokens(self, text: str) -> str:
         """Remove special tokens from generated text"""
+        # Handle None or empty input
+        if text is None:
+            return ""
+        if not isinstance(text, str):
+            text = str(text)
+        
         special_tokens = [
             "<|end_of_text|>",
             "<|endoftext|>",

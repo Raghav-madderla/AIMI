@@ -50,14 +50,18 @@ class InterviewService:
             "evaluation_context": None,
             "question_agent_response": None,
             "evaluation_agent_response": None,
-            "domain_coverage": None,  # Will be initialized by orchestrator
-            "domain_plan": None,  # Will be created by orchestrator
-            # NEW: Conversational flow fields
+            # Interview planning - will be populated by orchestrator via LLM
+            "interview_plan": None,
+            "planned_domains": None,  # LLM-generated list of domains to cover
+            "difficulty_sequence": None,  # Pre-planned difficulty sequence
+            "domain_coverage": {},  # Tracks questions asked per domain
+            "total_questions": 10,  # Total technical questions to ask (excluding intro)
+            # Conversational flow fields
             "conversation_phase": "greeting",
-            "current_resume_point_index": 0,
-            "resume_summary": resume_summary,
+            "resume_summary": resume_summary,  # LLM-generated summary
             "orchestrator_intent": None,
-            "pending_question": None
+            "pending_question": None,
+            "current_question_key_points": None
         }
         
         return initial_state

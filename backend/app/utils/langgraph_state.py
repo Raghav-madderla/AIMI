@@ -30,15 +30,16 @@ class InterviewState(TypedDict):
     question_agent_response: Optional[dict]
     evaluation_agent_response: Optional[dict]
     
-    # Interview planning
+    # Interview planning - NEW: LLM-generated interview plan
+    interview_plan: Optional[dict]  # LLM-generated plan with domains and strategy
+    planned_domains: Optional[List[str]]  # Ordered list of domains to cover
+    difficulty_sequence: Optional[List[str]]  # Pre-planned difficulty sequence (e.g., ["easy", "easy", "medium", ...])
     domain_coverage: Optional[dict]  # {domain: count} - tracks questions asked per domain
-    domain_plan: Optional[dict]  # {domain: target_count} - planned questions per domain
+    total_questions: int  # Total number of questions to ask
     
-    # NEW: Conversational flow tracking
-    conversation_phase: Literal["greeting", "intro_question", "resume_point", "technical_question", "closing"]
-    current_resume_point_index: int  # Track which resume point we're discussing
-    resume_summary: Optional[dict]  # Structured summary from resume_summary_agent
+    # Conversational flow tracking
+    conversation_phase: Literal["greeting", "intro_question", "technical_question", "closing"]
+    resume_summary: Optional[dict]  # Structured summary from resume_summary_agent (LLM-generated)
     orchestrator_intent: Optional[str]  # What the orchestrator wants to ask about
     pending_question: Optional[str]  # Question waiting to be cleaned
     current_question_key_points: Optional[List[str]]  # The required concepts for the current question
-

@@ -14,11 +14,14 @@ async def orchestrator_node(state: InterviewState) -> Dict:
 
 async def cleaning_agent_node(state: InterviewState) -> Dict:
     """
-    Cleaning agent that refines questions based on orchestrator's intent
+    Cleaning agent that refines questions by:
+    1. Retrieving relevant resume chunks from VDB by domain
+    2. Blending the question with candidate's experience
     """
     question_agent_response = state.get("question_agent_response")
     orchestrator_intent = state.get("orchestrator_intent", "")
     question_context = state.get("question_context") or {}
+    resume_id = state.get("resume_id", "")  # Get resume_id for VDB lookup
     
     if not question_agent_response or not question_agent_response.get("question"):
         # No question to clean, pass through
@@ -26,14 +29,13 @@ async def cleaning_agent_node(state: InterviewState) -> Dict:
     
     generated_question = question_agent_response.get("question")
     domain = question_context.get("domain", "General")
-    resume_context = question_context.get("resume_context", "")
     
-    # Clean the question
+    # Clean the question - now retrieves resume context from VDB by domain
     result = await question_cleaning_agent(
         generated_question=generated_question,
-        resume_point=resume_context,
-        orchestrator_intent=orchestrator_intent,
-        domain=domain
+        domain=domain,
+        resume_id=resume_id,
+        orchestrator_intent=orchestrator_intent
     )
     
     if result.get("success"):
