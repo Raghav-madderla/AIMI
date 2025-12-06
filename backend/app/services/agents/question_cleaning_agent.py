@@ -164,16 +164,23 @@ Create a single, complete interview question that:
 3. Feels natural and conversational (like a real interviewer)
 4. Is complete and grammatically correct
 5. Does NOT start with "I see you..." or similar robotic phrases
+6. AVOID starting with "Could you walk me through...", "Could you explain...", "Can you tell me..." - these are overused!
 
-STRATEGIES TO USE:
+STRATEGIES TO USE (pick different ones each time):
 - DEEP DIVE: Connect their specific project/experience to the technical concept
   Example: "In your [specific project], how did you handle [technical concept]? What trade-offs did you consider?"
 
-- EXPERIENCE-BASED: Ask them to explain their approach using their real work
-  Example: "Walk me through how you implemented [concept] in your [specific experience]. What challenges did you face?"
+- DIRECT CHALLENGE: Ask them to solve or explain directly
+  Example: "What happens under the hood when [concept]?", "How does [thing] actually work?"
+
+- SCENARIO-BASED: Put them in a hypothetical situation
+  Example: "Imagine your team encounters [problem]. How would you approach it using your experience from [project]?"
 
 - COMPARATIVE: Ask them to compare approaches based on their experience
-  Example: "You mentioned using [approach A] in [project]. Have you considered [approach B]? When would you choose one over the other?"
+  Example: "You used [approach A] in [project]. When would [approach B] have been a better choice?"
+
+- PRACTICAL APPLICATION: Ask about real-world usage
+  Example: "When building [specific system], why did you choose [approach]?", "What made you decide on [tool/technique]?"
 
 OUTPUT:
 Write ONLY the final question. Make sure it is:
@@ -183,17 +190,17 @@ Write ONLY the final question. Make sure it is:
 - Specific to their experience
 
 FINAL QUESTION:"""
-
+    
     try:
         messages = [
-            {
-                "role": "system",
+                {
+                    "role": "system",
                 "content": "You are an expert interviewer. Output ONLY the final interview question. The question must be complete and end with a question mark."
-            },
-            {
-                "role": "user",
-                "content": prompt
-            }
+                },
+                {
+                    "role": "user",
+                    "content": prompt
+                }
         ]
         
         response = await local_llm_service.generate_async(
@@ -230,7 +237,20 @@ RAW QUESTION: {raw_question}
 DOMAIN: {domain}
 GOAL: {orchestrator_intent}
 
-Make the question sound natural and professional. Output ONLY the final question:"""
+CRITICAL INSTRUCTIONS:
+1. Make the question sound natural and professional
+2. DO NOT start with repetitive phrases like:
+   - "Could you walk me through..."
+   - "Could you explain..."
+   - "Can you tell me about..."
+3. VARY your question starters. Use diverse patterns like:
+   - Direct questions: "What happens when...", "How does..."
+   - Scenario-based: "Imagine you're working on...", "In a situation where..."
+   - Comparative: "What's the difference between..."
+   - Practical: "When would you choose...", "Why might you prefer..."
+   - Challenge: "How would you handle...", "What approach would you take..."
+
+Output ONLY the final question:"""
 
     try:
         messages = [

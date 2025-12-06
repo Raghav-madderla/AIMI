@@ -4,6 +4,7 @@ import SetupScreen from './SetupScreen';
 import ChatInterviewScreen from './ChatInterviewScreen';
 import Sidebar from './Sidebar';
 import LoginScreen from './LoginScreen';
+import ReportDashboard from './ReportDashboard';
 import { apiService } from './api';
 
 const NAVBAR_HEIGHT = 72;
@@ -30,6 +31,10 @@ function App() {
   // Dark mode state (default: dark mode)
   const [isDarkMode, setIsDarkMode] = useState(true);
   const [showSetupModal, setShowSetupModal] = useState(false);
+  
+  // Report dashboard state
+  const [showReport, setShowReport] = useState(false);
+  const [currentReport, setCurrentReport] = useState(null);
 
   // Check authentication on mount
   useEffect(() => {
@@ -94,15 +99,33 @@ function App() {
   const loadSessionMessages = async (sessionId) => {
     try {
       const result = await apiService.getSessionMessages(sessionId);
-      return result.messages.map(msg => {
-        // All messages are displayed as-is (no detailed report formatting)
+      let savedReport = null;
+      
+      const messages = result.messages.map(msg => {
+        const metadata = msg.metadata || msg.message_metadata || null;
+        
+        // Check if this message contains a report (can be type 'report' or 'completion' with report)
+        if (metadata?.report) {
+          savedReport = metadata.report;
+          console.log('Found saved report in message:', msg.message_id);
+        }
+        
         return {
           role: msg.role,
           content: msg.content,
-          questionData: msg.metadata || msg.message_metadata || null,
-          feedback: (msg.metadata || msg.message_metadata)?.feedback || null,
+          questionData: metadata,
+          feedback: metadata?.feedback || null,
         };
       });
+      
+      // If we found a report, update the session and set current report
+      if (savedReport) {
+        console.log('Restoring saved report for session:', sessionId);
+        updateSession(sessionId, { report: savedReport });
+        setCurrentReport(savedReport);
+      }
+      
+      return messages;
     } catch (error) {
       console.error('Failed to load messages:', error);
       return [];
@@ -295,11 +318,39 @@ function App() {
             )
           );
         } else {
-          // Interview complete - show simple end note
+          // Interview complete - show report dashboard
           setCurrentQuestion(null);
           
-          // Display completion message (no detailed report)
-          const completionMessage = result.message || 'Thank you for completing the interview! Your responses have been recorded. We appreciate your time and effort. Best of luck with your application! 🎉';
+          // Check if we have a report from backend
+          if (result.report) {
+            console.log('Report received:', result.report);
+            setCurrentReport(result.report);
+            setShowReport(true);
+            
+            // Also save completion message to chat
+            const completionMessage = 'Interview completed successfully. Click "View Performance Report" below to see your detailed analysis and feedback.';
+            
+            setChatSessions(prevSessions => 
+              prevSessions.map(s => 
+                s.id === currentSessionId 
+                  ? { 
+                      ...s, 
+                      messages: [
+                        ...s.messages,
+                        {
+                          role: 'assistant',
+                          content: completionMessage,
+                          questionData: { type: 'completion', report: result.report },
+                        }
+                      ],
+                      report: result.report  // Store report in session
+                    }
+                  : s
+              )
+            );
+          } else {
+            // Fallback if no report
+            const completionMessage = result.message || 'Thank you for completing the interview. Your responses have been recorded and will be reviewed.';
             
             setChatSessions(prevSessions => 
               prevSessions.map(s => 
@@ -318,6 +369,7 @@ function App() {
                   : s
               )
             );
+          }
         }
       }
     } catch (error) {
@@ -337,15 +389,31 @@ function App() {
     setCurrentSessionId(sessionId);
     setAppState('interview');
     setIsLoading(true);
+    // Reset report state when switching sessions
+    setShowReport(false);
+    setCurrentReport(null);
     
     try {
       // Load session messages from backend
+      // This will also set currentReport if a report is found
       await fetchSessionData(sessionId);
+      
+      // Note: currentReport is set inside loadSessionMessages when report is found
+      // We don't need to check session.report here as it uses stale state
     } catch (error) {
       setError('Failed to load session messages');
       console.error('Load session error:', error);
     } finally {
       setIsLoading(false);
+    }
+  };
+  
+  // Handle viewing report for current session
+  const handleViewReport = () => {
+    const session = getCurrentSession();
+    if (session?.report) {
+      setCurrentReport(session.report);
+      setShowReport(true);
     }
   };
 
@@ -414,6 +482,20 @@ function App() {
       case 'setup':
         return <SetupScreen onStartInterview={handleStartInterview} isDarkMode={isDarkMode} />;
       case 'interview':
+        // Show Report Dashboard if report is available
+        if (showReport && currentReport) {
+          return (
+            <ReportDashboard 
+              report={currentReport} 
+              isDarkMode={isDarkMode}
+              onClose={() => {
+                setShowReport(false);
+                setCurrentReport(null);
+              }}
+            />
+          );
+        }
+        
         return (
           <>
             <Sidebar
@@ -437,6 +519,8 @@ function App() {
                   isDarkMode={isDarkMode}
                   currentQuestion={currentQuestion}
                   user={user}
+                  onViewReport={handleViewReport}
+                  hasReport={!!getCurrentSession()?.report || !!currentReport}
                 />
               ) : (
                 <div style={{

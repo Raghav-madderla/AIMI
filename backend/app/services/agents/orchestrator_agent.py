@@ -106,7 +106,7 @@ async def orchestrator_agent(state: InterviewState) -> Dict:
             first_difficulty = difficulty_sequence[0] if difficulty_sequence else "easy"
             
             print(f"Technical Q#1: Domain={first_domain}, Difficulty={first_difficulty}")
-            
+        
             # Generate orchestrator intent for first question
             orchestrator_intent = await _generate_orchestrator_intent(first_domain, job_role, first_difficulty)
             
@@ -187,8 +187,8 @@ async def orchestrator_agent(state: InterviewState) -> Dict:
             "difficulty": difficulty,
             "orchestrator_intent": orchestrator_intent,
             "question_context": {
-                "domain": selected_domain,
-                "difficulty": difficulty,
+        "domain": selected_domain,
+        "difficulty": difficulty,
                 "round": "technical_deep_dive"
             },
             "planned_domains": planned_domains,

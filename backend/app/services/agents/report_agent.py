@@ -1,10 +1,18 @@
 """
 Report Generation Agent
 
-Purpose: Generates comprehensive interview analysis and feedback report
+Generates comprehensive interview report with all metrics for visual dashboard:
+1. Executive Summary
+2. Metric Breakdown (Technical Accuracy, Completeness, Clarity)
+3. Domain Performance
+4. Difficulty Performance
+5. Question-by-Question Details
+6. LLM-Generated Insights
+7. Score Progression
 """
 
 from typing import Dict, List
+from datetime import datetime
 from app.services.local_llm_service import local_llm_service
 
 
@@ -16,20 +24,9 @@ async def generate_final_report(
     session_id: str
 ) -> Dict:
     """
-    Generate comprehensive interview report with analytics
-    
-    Args:
-        evaluation_history: List of all evaluations with scores
-        user_answers: List of user answers
-        previous_questions: List of questions asked
-        job_role: Target job role
-        session_id: Interview session ID
-    
-    Returns:
-        Comprehensive report with scores, strengths, weaknesses, and recommendations
+    Generate comprehensive interview report with all 7 dashboard sections
     """
     
-    # Calculate overall statistics
     total_questions = len(evaluation_history)
     if total_questions == 0:
         return {
@@ -37,213 +34,386 @@ async def generate_final_report(
             "message": "Interview was too short to generate a report"
         }
     
-    scores = [eval.get("score", 0) for eval in evaluation_history]
-    average_score = sum(scores) / len(scores) if scores else 0
+    # ========================================
+    # SECTION 1: EXECUTIVE SUMMARY
+    # ========================================
+    overall_scores = [eval.get("score", 0) for eval in evaluation_history]
+    overall_score = sum(overall_scores) / len(overall_scores) if overall_scores else 0
     
-    # Domain-wise performance
-    domain_performance = {}
-    for i, eval in enumerate(evaluation_history):
-        domain = eval.get("domain", "Unknown")
-        score = eval.get("score", 0)
-        if domain not in domain_performance:
-            domain_performance[domain] = []
-        domain_performance[domain].append(score)
+    performance_level = _get_performance_level(overall_score)
     
-    domain_averages = {
-        domain: sum(scores) / len(scores) 
-        for domain, scores in domain_performance.items()
+    executive_summary = {
+        "overall_score": round(overall_score, 2),
+        "overall_percentage": round(overall_score * 100, 1),
+        "performance_level": performance_level["level"],
+        "performance_color": performance_level["color"],
+        "total_questions": total_questions,
+        "timestamp": datetime.now().isoformat()
     }
     
-    # Prepare conversation history for LLM analysis
-    conversation_summary = []
+    # ========================================
+    # SECTION 2: METRIC BREAKDOWN (3 Core Pillars)
+    # ========================================
+    technical_accuracy_scores = []
+    completeness_scores = []
+    clarity_scores = []
+    
+    for eval in evaluation_history:
+        feedback = eval.get("feedback", {})
+        if isinstance(feedback, dict):
+            technical_accuracy_scores.append(feedback.get("technical_accuracy", eval.get("score", 0.5)))
+            completeness_scores.append(feedback.get("completeness", eval.get("score", 0.5)))
+            clarity_scores.append(feedback.get("clarity", eval.get("score", 0.5)))
+        else:
+            # Fallback if feedback is not dict
+            score = eval.get("score", 0.5)
+            technical_accuracy_scores.append(score)
+            completeness_scores.append(score)
+            clarity_scores.append(score)
+    
+    metric_breakdown = {
+        "technical_accuracy": {
+            "score": round(sum(technical_accuracy_scores) / len(technical_accuracy_scores), 2) if technical_accuracy_scores else 0,
+            "label": "Technical Accuracy",
+            "description": "Factual correctness of answers"
+        },
+        "completeness": {
+            "score": round(sum(completeness_scores) / len(completeness_scores), 2) if completeness_scores else 0,
+            "label": "Completeness",
+            "description": "Coverage of key points"
+        },
+        "clarity": {
+            "score": round(sum(clarity_scores) / len(clarity_scores), 2) if clarity_scores else 0,
+            "label": "Clarity",
+            "description": "Clear communication"
+        }
+    }
+    
+    # ========================================
+    # SECTION 3: DOMAIN PERFORMANCE
+    # ========================================
+    domain_scores = {}
+    for i, eval in enumerate(evaluation_history):
+        domain = eval.get("domain", "Unknown")
+        if domain == "Introduction":
+            continue  # Skip intro question
+        score = eval.get("score", 0)
+        if domain not in domain_scores:
+            domain_scores[domain] = []
+        domain_scores[domain].append(score)
+    
+    domain_performance = {
+        domain: {
+            "score": round(sum(scores) / len(scores), 2),
+            "count": len(scores)
+        }
+        for domain, scores in domain_scores.items()
+    }
+    
+    # Find strongest and weakest
+    if domain_performance:
+        sorted_domains = sorted(domain_performance.items(), key=lambda x: x[1]["score"], reverse=True)
+        strongest_domain = sorted_domains[0][0] if sorted_domains else None
+        weakest_domain = sorted_domains[-1][0] if len(sorted_domains) > 1 else None
+    else:
+        strongest_domain = None
+        weakest_domain = None
+    
+    domain_analysis = {
+        "scores": domain_performance,
+        "strongest": strongest_domain,
+        "weakest": weakest_domain,
+        "domains_list": list(domain_performance.keys()),
+        "scores_list": [d["score"] for d in domain_performance.values()]
+    }
+    
+    # ========================================
+    # SECTION 4: DIFFICULTY PERFORMANCE
+    # ========================================
+    difficulty_scores = {"easy": [], "medium": [], "hard": []}
+    
+    for i, eval in enumerate(evaluation_history):
+        if i < len(previous_questions):
+            difficulty = previous_questions[i].get("difficulty", "medium")
+            score = eval.get("score", 0)
+            if difficulty in difficulty_scores:
+                difficulty_scores[difficulty].append(score)
+    
+    difficulty_performance = {
+        difficulty: {
+            "score": round(sum(scores) / len(scores), 2) if scores else 0,
+            "count": len(scores)
+        }
+        for difficulty, scores in difficulty_scores.items()
+    }
+    
+    # ========================================
+    # SECTION 5: QUESTION-BY-QUESTION BREAKDOWN
+    # ========================================
+    questions_breakdown = []
     for i in range(min(len(previous_questions), len(user_answers), len(evaluation_history))):
         q = previous_questions[i]
         a = user_answers[i]
         e = evaluation_history[i]
         
-        conversation_summary.append({
+        feedback = e.get("feedback", {})
+        
+        questions_breakdown.append({
+            "index": i + 1,
             "question": q.get("question_text", ""),
-            "answer": a.get("answer", ""),
-            "score": e.get("score", 0),
-            "domain": e.get("domain", ""),
-            "feedback": e.get("feedback", {})
+            "answer": a.get("answer", "")[:500],  # Truncate long answers
+            "domain": e.get("domain", q.get("domain", "Unknown")),
+            "difficulty": q.get("difficulty", "medium"),
+            "score": round(e.get("score", 0), 2),
+            "feedback": feedback.get("feedback", feedback.get("feedback_text", "")) if isinstance(feedback, dict) else str(feedback),
+            "technical_accuracy": feedback.get("technical_accuracy", e.get("score", 0.5)) if isinstance(feedback, dict) else e.get("score", 0.5),
+            "completeness": feedback.get("completeness", e.get("score", 0.5)) if isinstance(feedback, dict) else e.get("score", 0.5),
+            "clarity": feedback.get("clarity", e.get("score", 0.5)) if isinstance(feedback, dict) else e.get("score", 0.5)
         })
     
-    # Create comprehensive prompt for final analysis
-    prompt = f"""You are an expert hiring manager providing final interview feedback for a {job_role} position.
-
-INTERVIEW STATISTICS:
-- Total Questions: {total_questions}
-- Overall Score: {average_score:.2f}/1.0 ({average_score*100:.1f}%)
-- Domain Performance: {domain_averages}
-
-CONVERSATION HISTORY:
-{format_conversation_for_analysis(conversation_summary)}
-
-Provide a comprehensive interview report with:
-
-1. **Overall Performance Summary** (2-3 sentences about general impression)
-
-2. **Strengths** (3-5 key strengths demonstrated)
-
-3. **Areas for Improvement** (3-5 areas to work on)
-
-4. **Domain-Specific Analysis** (Brief analysis for each technical domain covered)
-
-5. **Recommendations** (3-4 specific, actionable recommendations for improvement)
-
-6. **Hiring Decision Guidance** (Would you recommend this candidate? Why or why not?)
-
-Format as JSON with keys: overall_summary, strengths (array), areas_for_improvement (array), domain_analysis (object), recommendations (array), hiring_decision (object with 'recommendation' and 'reasoning')
-"""
+    # ========================================
+    # SECTION 6: LLM-GENERATED INSIGHTS
+    # ========================================
+    insights = await _generate_llm_insights(
+        overall_score=overall_score,
+        domain_performance=domain_performance,
+        difficulty_performance=difficulty_performance,
+        metric_breakdown=metric_breakdown,
+        questions_breakdown=questions_breakdown,
+        job_role=job_role
+    )
     
+    # ========================================
+    # SECTION 7: SCORE PROGRESSION
+    # ========================================
+    score_progression = []
+    for i, eval in enumerate(evaluation_history):
+        score_progression.append({
+            "question_number": i + 1,
+            "score": round(eval.get("score", 0), 2),
+            "domain": eval.get("domain", "Unknown"),
+            "difficulty": previous_questions[i].get("difficulty", "medium") if i < len(previous_questions) else "medium"
+        })
+    
+    # Calculate trend
+    if len(score_progression) >= 3:
+        first_half = score_progression[:len(score_progression)//2]
+        second_half = score_progression[len(score_progression)//2:]
+        first_avg = sum(s["score"] for s in first_half) / len(first_half)
+        second_avg = sum(s["score"] for s in second_half) / len(second_half)
+        
+        if second_avg > first_avg + 0.1:
+            trend = "improving"
+        elif second_avg < first_avg - 0.1:
+            trend = "declining"
+        else:
+            trend = "consistent"
+    else:
+        trend = "too_few_questions"
+    
+    progression_analysis = {
+        "scores": score_progression,
+        "trend": trend,
+        "highest_score": max(s["score"] for s in score_progression) if score_progression else 0,
+        "lowest_score": min(s["score"] for s in score_progression) if score_progression else 0
+    }
+    
+    # ========================================
+    # COMPILE FINAL REPORT
+    # ========================================
+    final_report = {
+        "session_id": session_id,
+        "job_role": job_role,
+        "generated_at": datetime.now().isoformat(),
+        
+        # Section 1: Executive Summary
+        "executive_summary": executive_summary,
+        
+        # Section 2: Metric Breakdown
+        "metric_breakdown": metric_breakdown,
+        
+        # Section 3: Domain Performance
+        "domain_analysis": domain_analysis,
+        
+        # Section 4: Difficulty Performance
+        "difficulty_performance": difficulty_performance,
+        
+        # Section 5: Question Breakdown
+        "questions_breakdown": questions_breakdown,
+        
+        # Section 6: LLM Insights
+        "insights": insights,
+        
+        # Section 7: Score Progression
+        "score_progression": progression_analysis,
+        
+        # Legacy compatibility
+        "statistics": {
+            "total_questions": total_questions,
+            "overall_score": round(overall_score, 2),
+            "overall_percentage": round(overall_score * 100, 1),
+            "domain_scores": {k: v["score"] for k, v in domain_performance.items()}
+        },
+        "analysis": insights  # Legacy field
+    }
+    
+    return final_report
+
+
+def _get_performance_level(score: float) -> Dict:
+    """Get performance level with color"""
+    if score >= 0.9:
+        return {"level": "Outstanding", "color": "#10b981"}
+    elif score >= 0.8:
+        return {"level": "Excellent", "color": "#22c55e"}
+    elif score >= 0.7:
+        return {"level": "Strong", "color": "#84cc16"}
+    elif score >= 0.6:
+        return {"level": "Good", "color": "#eab308"}
+    elif score >= 0.5:
+        return {"level": "Developing", "color": "#f97316"}
+    else:
+        return {"level": "Needs Improvement", "color": "#ef4444"}
+
+
+async def _generate_llm_insights(
+    overall_score: float,
+    domain_performance: Dict,
+    difficulty_performance: Dict,
+    metric_breakdown: Dict,
+    questions_breakdown: List,
+    job_role: str
+) -> Dict:
+    """Generate LLM-powered insights for the report"""
+    
+    # Prepare context for LLM
+    context = f"""
+Interview Performance Data for {job_role} position:
+
+Overall Score: {overall_score*100:.1f}%
+
+Domain Scores:
+{chr(10).join([f'- {d}: {s["score"]*100:.0f}%' for d, s in domain_performance.items()])}
+
+Difficulty Performance:
+- Easy: {difficulty_performance.get("easy", {}).get("score", 0)*100:.0f}%
+- Medium: {difficulty_performance.get("medium", {}).get("score", 0)*100:.0f}%
+- Hard: {difficulty_performance.get("hard", {}).get("score", 0)*100:.0f}%
+
+Metrics:
+- Technical Accuracy: {metric_breakdown["technical_accuracy"]["score"]*100:.0f}%
+- Completeness: {metric_breakdown["completeness"]["score"]*100:.0f}%
+- Clarity: {metric_breakdown["clarity"]["score"]*100:.0f}%
+"""
+
+    prompt = f"""Based on this interview performance data, generate insights for the candidate.
+
+{context}
+
+Provide your response as JSON with these exact keys:
+{{
+    "overall_summary": "2-3 sentence summary of performance",
+    "strengths": ["strength1", "strength2", "strength3"],
+    "areas_for_improvement": ["area1", "area2", "area3"],
+    "recommendations": ["recommendation1", "recommendation2", "recommendation3"],
+    "hiring_recommendation": {{
+        "decision": "Strongly Recommend / Recommend / Consider / Not Recommended",
+        "confidence": 0.0-1.0,
+        "reasoning": "Brief reasoning"
+    }}
+}}
+
+Be specific and actionable. Use the actual data provided."""
+
     try:
-        print(f"Generating report with Hugging Face API")
         messages = [
-                {
-                    "role": "system",
-                    "content": "You are an expert hiring manager providing detailed, constructive interview feedback. Be honest but encouraging. Format response as valid JSON."
-                },
-                {
-                    "role": "user",
-                    "content": prompt
-                }
+            {"role": "system", "content": "You are an expert technical interviewer providing actionable feedback. Output valid JSON only."},
+            {"role": "user", "content": prompt}
         ]
         
-        analysis = await local_llm_service.generate_json_async(messages, max_new_tokens=2000, temperature=0.7)
-        print(f"API response received")
+        result = await local_llm_service.generate_json_async(messages, max_new_tokens=1000, temperature=0.5)
         
-        if not analysis:
-            # Fallback if JSON parsing fails
-            raise ValueError("Failed to parse JSON response")
-        
-        # Combine statistics with LLM analysis
-        final_report = {
-            "session_id": session_id,
-            "job_role": job_role,
-            "statistics": {
-                "total_questions": total_questions,
-                "overall_score": round(average_score, 2),
-                "overall_percentage": round(average_score * 100, 1),
-                "domain_scores": {
-                    domain: round(avg, 2) 
-                    for domain, avg in domain_averages.items()
-                },
-                "score_distribution": {
-                    "excellent (>0.8)": len([s for s in scores if s > 0.8]),
-                    "good (0.6-0.8)": len([s for s in scores if 0.6 <= s <= 0.8]),
-                    "needs_improvement (<0.6)": len([s for s in scores if s < 0.6])
-                }
-            },
-            "analysis": analysis,
-            "detailed_feedback": conversation_summary  # Include per-question feedback
-        }
-        
-        return final_report
+        if result:
+            return result
         
     except Exception as e:
-        print(f"Report generation failed: {str(e)}")
-        print(f"   Error type: {type(e).__name__}")
-        import traceback
-        print(f"   Traceback: {traceback.format_exc()}")
+        print(f"LLM insights generation failed: {e}")
         
-        # Fallback: Return basic statistics with better analysis
-        return {
-            "session_id": session_id,
-            "job_role": job_role,
-            "statistics": {
-                "total_questions": total_questions,
-                "overall_score": round(average_score, 2),
-                "overall_percentage": round(average_score * 100, 1),
-                "domain_scores": domain_averages
-            },
-            "analysis": {
-                "overall_summary": generate_basic_summary(average_score, total_questions, domain_averages),
-                "strengths": generate_basic_strengths(domain_averages, scores),
-                "areas_for_improvement": generate_basic_improvements(domain_averages, scores),
-                "domain_analysis": {
-                    domain: f"Score: {avg:.0%}" for domain, avg in domain_averages.items()
-                },
-                "recommendations": generate_basic_recommendations(average_score, domain_averages),
-                "hiring_decision": {
-                    "recommendation": "Review Required" if average_score < 0.6 else "Recommend" if average_score >= 0.8 else "Borderline",
-                    "reasoning": f"Based on {average_score*100:.1f}% overall score across {total_questions} questions"
-                }
-            },
-            "error": str(e)
-        }
+    # Fallback insights based on data
+    return _generate_fallback_insights(
+        overall_score, domain_performance, difficulty_performance, metric_breakdown
+    )
 
 
-def generate_basic_summary(avg_score: float, total_q: int, domains: dict) -> str:
-    """Generate basic summary when LLM fails"""
-    if avg_score >= 0.8:
-        performance = "excellent"
-    elif avg_score >= 0.6:
-        performance = "good"
-    else:
-        performance = "needs improvement"
+def _generate_fallback_insights(
+    overall_score: float,
+    domain_performance: Dict,
+    difficulty_performance: Dict,
+    metric_breakdown: Dict
+) -> Dict:
+    """Generate fallback insights when LLM fails"""
     
-    top_domain = max(domains.items(), key=lambda x: x[1])[0] if domains else "N/A"
-    return f"Completed {total_q} questions with {performance} overall performance ({avg_score*100:.1f}%). Strongest in {top_domain}."
-
-
-def generate_basic_strengths(domains: dict, scores: list) -> list:
-    """Generate basic strengths when LLM fails"""
+    # Find strongest/weakest domains
+    sorted_domains = sorted(domain_performance.items(), key=lambda x: x[1]["score"], reverse=True)
+    strongest = sorted_domains[0] if sorted_domains else ("N/A", {"score": 0})
+    weakest = sorted_domains[-1] if len(sorted_domains) > 1 else ("N/A", {"score": 0})
+    
+    # Generate insights
     strengths = []
-    for domain, avg in sorted(domains.items(), key=lambda x: x[1], reverse=True)[:3]:
-        if avg >= 0.7:
-            strengths.append(f"Strong performance in {domain} ({avg*100:.1f}%)")
-    
-    if not strengths:
-        strengths = ["Completed all questions", "Showed engagement throughout"]
-    
-    return strengths
-
-
-def generate_basic_improvements(domains: dict, scores: list) -> list:
-    """Generate basic improvements when LLM fails"""
     improvements = []
-    for domain, avg in sorted(domains.items(), key=lambda x: x[1])[:3]:
-        if avg < 0.7:
-            improvements.append(f"Develop deeper knowledge in {domain} (current: {avg*100:.1f}%)")
-    
-    if not improvements:
-        improvements = ["Continue practicing", "Explore advanced topics"]
-    
-    return improvements
-
-
-def generate_basic_recommendations(avg_score: float, domains: dict) -> list:
-    """Generate basic recommendations when LLM fails"""
     recommendations = []
     
-    # Lowest scoring domain
-    if domains:
-        lowest_domain = min(domains.items(), key=lambda x: x[1])[0]
-        recommendations.append(f"Focus on improving {lowest_domain} skills")
+    if strongest[1]["score"] >= 0.7:
+        strengths.append(f"Strong performance in {strongest[0]} ({strongest[1]['score']*100:.0f}%)")
     
-    if avg_score < 0.6:
-        recommendations.append("Review fundamental concepts")
-        recommendations.append("Practice with more examples")
-    elif avg_score < 0.8:
-        recommendations.append("Work on depth of understanding")
-        recommendations.append("Practice explaining concepts clearly")
+    if metric_breakdown["clarity"]["score"] >= 0.7:
+        strengths.append("Clear and articulate communication")
+    
+    if metric_breakdown["technical_accuracy"]["score"] >= 0.7:
+        strengths.append("Technically accurate responses")
+    
+    if not strengths:
+        strengths = ["Completed all questions", "Showed effort throughout interview"]
+    
+    if weakest[1]["score"] < 0.6:
+        improvements.append(f"Deepen knowledge in {weakest[0]}")
+    
+    if metric_breakdown["completeness"]["score"] < 0.6:
+        improvements.append("Provide more comprehensive answers covering all key points")
+    
+    if difficulty_performance.get("hard", {}).get("score", 0) < 0.5:
+        improvements.append("Practice with more challenging technical problems")
+    
+    if not improvements:
+        improvements = ["Continue exploring advanced topics", "Gain more hands-on experience"]
+    
+    # Recommendations
+    recommendations.append(f"Focus on improving {weakest[0]} skills with practical projects")
+    recommendations.append("Practice explaining complex concepts with real-world examples")
+    recommendations.append("Review technical fundamentals in weaker areas")
+    
+    # Hiring recommendation
+    if overall_score >= 0.8:
+        decision = "Strongly Recommend"
+        confidence = 0.9
+    elif overall_score >= 0.7:
+        decision = "Recommend"
+        confidence = 0.75
+    elif overall_score >= 0.6:
+        decision = "Consider"
+        confidence = 0.6
     else:
-        recommendations.append("Continue with advanced topics")
-        recommendations.append("Focus on real-world applications")
+        decision = "Not Recommended"
+        confidence = 0.7
     
-    return recommendations
-
-
-def format_conversation_for_analysis(conversation_summary: List[Dict]) -> str:
-    """Format conversation history for LLM analysis"""
-    formatted = []
-    for i, item in enumerate(conversation_summary, 1):
-        formatted.append(f"""
-Question {i} ({item['domain']}):
-Q: {item['question']}
-A: {item['answer'][:300]}...
-Score: {item['score']:.2f}
-Feedback: {item['feedback'].get('feedback_text', 'N/A')}
----""")
-    return "\n".join(formatted)
+    return {
+        "overall_summary": f"The candidate scored {overall_score*100:.0f}% overall, showing {_get_performance_level(overall_score)['level'].lower()} performance. Strongest in {strongest[0]}, with room to improve in {weakest[0]}.",
+        "strengths": strengths[:3],
+        "areas_for_improvement": improvements[:3],
+        "recommendations": recommendations[:3],
+        "hiring_recommendation": {
+            "decision": decision,
+            "confidence": confidence,
+            "reasoning": f"Based on {overall_score*100:.0f}% overall score with notable strength in {strongest[0]}."
+        }
+    }

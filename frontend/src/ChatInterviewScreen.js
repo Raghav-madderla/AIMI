@@ -1,6 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react';
 
-function ChatInterviewScreen({ messages, onSendMessage, isLoading, isDarkMode, currentQuestion, user }) {
+function ChatInterviewScreen({ messages, onSendMessage, isLoading, isDarkMode, currentQuestion, user, onViewReport, hasReport }) {
   const [input, setInput] = useState('');
   const messagesEndRef = useRef(null);
 
@@ -262,9 +262,46 @@ function ChatInterviewScreen({ messages, onSendMessage, isLoading, isDarkMode, c
                     {msg.content}
                   </div>
                 ) : (
+                  <>
                   <div style={styles.messageAIPanel}>
                     {msg.content}
                   </div>
+                    {/* Show View Report button for completion/report messages */}
+                    {(msg.questionData?.type === 'completion' || msg.questionData?.type === 'report') && hasReport && (
+                      <button
+                        onClick={onViewReport}
+                        style={{
+                          marginTop: '1rem',
+                          padding: '0.75rem 1.5rem',
+                          backgroundColor: isDarkMode ? '#6366f1' : '#4f46e5',
+                          color: '#ffffff',
+                          border: 'none',
+                          borderRadius: '8px',
+                          fontSize: '0.875rem',
+                          fontWeight: '600',
+                          cursor: 'pointer',
+                          display: 'inline-flex',
+                          alignItems: 'center',
+                          gap: '0.5rem',
+                          transition: 'all 0.2s ease',
+                          boxShadow: '0 4px 14px rgba(99, 102, 241, 0.3)',
+                        }}
+                        onMouseEnter={(e) => {
+                          e.target.style.transform = 'translateY(-2px)';
+                          e.target.style.boxShadow = '0 6px 20px rgba(99, 102, 241, 0.4)';
+                        }}
+                        onMouseLeave={(e) => {
+                          e.target.style.transform = 'translateY(0)';
+                          e.target.style.boxShadow = '0 4px 14px rgba(99, 102, 241, 0.3)';
+                        }}
+                      >
+                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                          <path d="M9 17H7A5 5 0 0 1 7 7h2M15 7h2a5 5 0 0 1 0 10h-2M8 12h8"/>
+                        </svg>
+                        View Performance Report
+                      </button>
+                    )}
+                  </>
                 )}
               </div>
             </div>
